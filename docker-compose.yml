@@ -1,0 +1,48 @@
+# Local/dev stack. Every secret is REQUIRED (no defaults) — run scripts/gen-secrets.sh first.
+# All ports bind to 127.0.0.1 only. Production: managed Postgres/Redis, Keycloak behind TLS
+# with `start` (not start-dev) and a real hostname — see README "Production checklist".
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: telus_owner
+      POSTGRES_PASSWORD: ${OWNER_DB_PASSWORD:?run scripts/gen-secrets.sh}
+      POSTGRES_DB: telus
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run scripts/gen-secrets.sh}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?run scripts/gen-secrets.sh}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telus_owner -d telus"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?run scripts/gen-secrets.sh}", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: [redisdata:/data]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?run scripts/gen-secrets.sh}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:?run scripts/gen-secrets.sh}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run scripts/gen-secrets.sh}
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./infra/keycloak/telus-realm.json:/opt/keycloak/data/import/telus-realm.json:ro
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  redisdata:

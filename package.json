@@ -1,0 +1,10 @@
+{
+  "name": "telus-auction-platform",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "typecheck": "npm run typecheck -w @telus/api",
+    "test": "npm test -w @telus/api",
+    "test:db": "npm run test:db -w @telus/api"
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "realm": "telus",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "maxDeltaTimeSeconds": 43200,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "passwordPolicy": "length(14) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername and passwordHistory(5)",
+  "otpPolicyType": "totp",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "roles": {
+    "realm": [
+      { "name": "super_admin", "description": "Full staff access" },
+      { "name": "auction_manager", "description": "Create/manage auctions and customers" },
+      { "name": "sales_manager", "description": "View customers, results, reports" },
+      { "name": "finance", "description": "Deposits, invoices, payments" },
+      { "name": "view_only", "description": "Read-only staff" },
+      { "name": "customer_admin", "description": "Customer org owner: bids + manages team logins" },
+      { "name": "customer_bidder", "description": "Customer team member who can bid" },
+      { "name": "customer_viewer", "description": "Customer team member, read-only" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "telus-web",
+      "name": "TELUS web app",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:3000/*"],
+      "webOrigins": ["http://localhost:3000"],
+      "attributes": { "pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:3000/*" },
+      "protocolMappers": [
+        {
+          "name": "telus-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "telus-api", "id.token.claim": "false", "access.token.claim": "true" }
+        },
+        {
+          "name": "customer_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": { "user.attribute": "customer_id", "claim.name": "customer_id", "jsonType.label": "String", "id.token.claim": "false", "access.token.claim": "true" }
+        }
+      ]
+    },
+    { "clientId": "telus-api", "name": "TELUS API (resource server)", "enabled": true, "bearerOnly": true }
+  ]
+}
