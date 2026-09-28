@@ -25,6 +25,14 @@ const EnvSchema = z.object({
   TEAM_USER_REQUIRED_ACTIONS: z.string().default('UPDATE_PASSWORD,CONFIGURE_TOTP'),
   // Rate limits shared by all instances when set (falls back to REDIS_URL, then to in-memory).
   RATE_LIMIT_REDIS_URL: z.string().url().optional(),
+  // Notification emails (outbid, results, cancellations, invoices). Unset SMTP_URL ⇒ emails stay queued, none sent.
+  // e.g. smtps://user:pass@smtp.example.com:465 — the password is never logged.
+  SMTP_URL: z.string().url().optional(),
+  MAIL_FROM: z.string().min(3).default('TELUS Auctions <no-reply@auctions.telus.ae>'),
+  /** Public web-app URL used for links in emails (e.g. https://auction.telus.ae). */
+  PUBLIC_WEB_URL: z.string().url().optional(),
+  DISPLAY_TIMEZONE: z.string().default('Asia/Dubai'),
+  EMAIL_INTERVAL_MS: z.coerce.number().int().min(200).max(600_000).default(2000),
 });
 export type Env = z.infer<typeof EnvSchema>;
 

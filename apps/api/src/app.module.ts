@@ -24,6 +24,7 @@ import { KeycloakAdmin } from './identity/keycloak-admin';
 import { InvoicesController } from './invoices/invoices.controller';
 import { InvoicesService } from './invoices/invoices.service';
 import { LifecycleService } from './lifecycle/lifecycle.service';
+import { NotificationService } from './notifications/notification.service';
 import { OutboxService } from './outbox/outbox.service';
 import { TeamController } from './team/team.controller';
 import { TeamService } from './team/team.service';
@@ -66,6 +67,7 @@ import { WorkersService } from './workers/workers.service';
     AdminSettingsService,
     LifecycleService,
     OutboxService,
+    NotificationService,
     RealtimeGateway,
     TicketService,
     KeycloakAdmin,

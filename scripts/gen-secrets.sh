@@ -36,6 +36,10 @@ OIDC_CLIENT_SECRET=$WEBSECRET
 API_URL=http://localhost:4000
 API_PUBLIC_URL=http://localhost:4000
 SESSION_SECRET=$(r)
+# Notification emails from the API (outbid, results, cancellations, invoices). Unset = queued, not sent.
+# SMTP_URL=smtps://user:password@smtp.example.com:465
+# MAIL_FROM=TELUS Auctions <no-reply@auctions.telus.ae>
+PUBLIC_WEB_URL=http://localhost:3000
 ENVEOF
 chmod 600 .env
 echo ".env written (mode 600)."

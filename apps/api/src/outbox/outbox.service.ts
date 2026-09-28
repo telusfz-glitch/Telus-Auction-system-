@@ -28,6 +28,8 @@ export class OutboxService {
         id: String(r.id), type: r.type, payload: r.payload, createdAt: new Date(r.created_at).toISOString(),
       }));
       await handler(events);
+      // Same transaction: emails are queued exactly once per event (dedupe keys absorb redeliveries).
+      await c.query('SELECT email_enqueue_for_events($1::bigint[])', [events.map((e) => e.id)]);
       await c.query('SELECT outbox_mark_published($1::bigint[])', [events.map((e) => e.id)]);
       return events.length;
     });
