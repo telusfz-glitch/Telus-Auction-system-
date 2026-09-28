@@ -1,6 +1,6 @@
 'use server';
 
-import { CreateTeamUserSchema, SettleInvoiceSchema, UpdateTeamUserSchema } from '@telus/shared';
+import { CreateTeamUserSchema, NotificationPrefsSchema, SettleInvoiceSchema, UpdateTeamUserSchema } from '@telus/shared';
 import { revalidatePath } from 'next/cache';
 import type { ZodError } from 'zod';
 import { api, asAction, type ActionResult } from '@/lib/api';
@@ -14,7 +14,8 @@ const invalid = (e: ZodError): ActionResult =>
 
 /**
  * Creates a login. Customers add to their own company (/team); staff name the company (customerId field).
- * The one-time temporary password comes back in the message and is never stored by the web app.
+ * The one-time temporary password comes back in the message and is never stored by the web app — unless the API is set
+ * to invite by email (TEAM_INVITE_METHOD=email), in which case there is no password at all.
  */
 export async function createTeamUserAction(_prev: ActionResult, form: FormData): Promise<ActionResult> {
   const s = await requireSession();
@@ -31,8 +32,10 @@ export async function createTeamUserAction(_prev: ActionResult, form: FormData):
     target = `/admin/customers/${customerId}`;
   }
   const res = await asAction(async () => {
-    const r = await api<{ temporaryPassword: string; email: string }>(s, path, { method: 'POST', body: input.data });
-    return `Login created for ${r.email}. Temporary password (shown once — share it securely): ${r.temporaryPassword}`;
+    const r = await api<{ temporaryPassword: string | null; email: string }>(s, path, { method: 'POST', body: input.data });
+    return r.temporaryPassword
+      ? `Login created for ${r.email}. Temporary password (shown once — share it securely): ${r.temporaryPassword}`
+      : `Login created for ${r.email}. An invitation to set a password was emailed to them.`;
   });
   revalidatePath(target);
   return res;
@@ -66,5 +69,18 @@ export async function settleInvoiceAction(_prev: ActionResult, form: FormData): 
     return input.data.status === 'paid' ? 'Marked as paid.' : 'Invoice voided.';
   });
   revalidatePath('/admin/invoices');
+  return res;
+}
+
+/** The signed-in customer's own notification preferences (any customer role). */
+export async function setNotificationPrefsAction(_prev: ActionResult, form: FormData): Promise<ActionResult> {
+  const s = await requireSession('customer');
+  const input = NotificationPrefsSchema.safeParse({ notifyOutbid: form.get('notifyOutbid') === 'on' });
+  if (!input.success) return invalid(input.error);
+  const res = await asAction(async () => {
+    await api(s, '/me/notifications', { method: 'PUT', body: input.data });
+    return input.data.notifyOutbid ? 'You will be emailed when you are outbid.' : 'Outbid emails turned off.';
+  });
+  revalidatePath('/team');
   return res;
 }

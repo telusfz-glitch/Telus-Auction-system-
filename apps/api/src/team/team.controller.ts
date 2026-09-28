@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Ip, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Ip, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
-  CUSTOMER_ROLES, CreateTeamUserSchema, STAFF_ROLES, UpdateTeamUserSchema, type CreateTeamUserInput, type UpdateTeamUserInput,
+  CUSTOMER_ROLES, CreateTeamUserSchema, NotificationPrefsSchema, type NotificationPrefs, STAFF_ROLES, UpdateTeamUserSchema, type CreateTeamUserInput, type UpdateTeamUserInput,
 } from '@telus/shared';
 import { CurrentPrincipal, Roles } from '../auth/decorators';
 import type { Principal } from '../auth/principal';
@@ -27,6 +27,15 @@ export class TeamController {
   @Patch('team/:id') @Roles('customer_admin')
   update(@CurrentPrincipal() p: Principal, @Param('id', Id) id: string, @Body(new ZodValidationPipe(UpdateTeamUserSchema)) b: UpdateTeamUserInput, @Ip() ip: string) {
     return this.team.update(p, id, b, ip);
+  }
+
+  // ---------------- every customer login: its own notification preferences ----------------
+  @Get('me/notifications') @Roles(...CUSTOMER_ROLES)
+  prefs(@CurrentPrincipal() p: Principal) { return this.team.getPrefs(p); }
+
+  @Put('me/notifications') @Roles(...CUSTOMER_ROLES)
+  setPrefs(@CurrentPrincipal() p: Principal, @Body(new ZodValidationPipe(NotificationPrefsSchema)) b: NotificationPrefs, @Ip() ip: string) {
+    return this.team.setPrefs(p, b, ip);
   }
 
   // ---------------- staff: any customer (e.g. the first administrator) ----------------

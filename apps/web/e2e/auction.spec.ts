@@ -270,6 +270,17 @@ test('team: a customer admin creates a login; the new person must set a password
   await expect(page.getByTestId('whoami')).toHaveText('Nadia New');
   await expect(page.getByRole('link', { name: 'October handsets' })).toBeVisible();   // same company, same invitations
 
+  // Each login controls its own outbid emails; the choice survives a reload.
+  await page.getByRole('link', { name: 'Team' }).click();
+  const prefs = page.getByTestId('my-notifications');
+  const box = prefs.getByLabel('Email me when my company is outbid');
+  await expect(box).toBeChecked();
+  await box.uncheck();
+  await prefs.getByRole('button', { name: 'Save' }).click();
+  await expect(prefs.getByText('Outbid emails turned off.')).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('my-notifications').getByLabel('Email me when my company is outbid')).not.toBeChecked();
+
   // Suspended by the admin WHILE signed in → Keycloak's back-channel logout ends the web session at once
   // (not at the next token refresh): the very next page load goes to the sign-in page.
   const member = alpha.page.getByTestId('member-newbidder@alpha.test');

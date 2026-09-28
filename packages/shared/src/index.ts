@@ -125,6 +125,10 @@ export const UpdateTeamUserSchema = z.object({
 }).partial().strict().refine((v) => Object.keys(v).length > 0, { message: 'nothing to update' });
 export type UpdateTeamUserInput = z.infer<typeof UpdateTeamUserSchema>;
 
+// Personal notification preferences of the signed-in customer login (results and invoices are always emailed).
+export const NotificationPrefsSchema = z.object({ notifyOutbid: z.boolean() }).strict();
+export type NotificationPrefs = z.infer<typeof NotificationPrefsSchema>;
+
 // ---------------- invoices ----------------
 export const SettleInvoiceSchema = z.object({
   status: z.enum(['paid', 'void']),

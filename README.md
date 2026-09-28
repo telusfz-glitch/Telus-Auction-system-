@@ -205,7 +205,7 @@ response).
 - **Rate limits shared across instances** through Redis (`RATE_LIMIT_REDIS_URL`, else `REDIS_URL`), atomic in a Lua script. If
   Redis is down the check fails **open** (logged) so a Redis outage cannot stop an auction.
 - **CI** (`.github/workflows/ci.yml`): production-dependency audit (fails on high), API typecheck and every suite against real
-  Postgres 16, Redis 7 and Keycloak 26.0.7 (the `REQUIRE_*` runs fail instead of skipping when a service is missing), web
+  Postgres 16, Redis 7 and Keycloak 26.6.4 (the `REQUIRE_*` runs fail instead of skipping when a service is missing), web
   typecheck, unit tests, production build and the Playwright suite.
 - **Secret scanning** in CI: gitleaks 8.28.0 (checksum-pinned) over the full history. `.gitleaks.toml` allow-lists only known test
   fixtures, by value pattern (`test-…secret…`, `e2e-…secret…`, two JWT header prefixes), never by directory — a real key committed
@@ -225,8 +225,21 @@ response).
 - **Keycloak 26.6.4** with the service account confined by fine-grained admin permissions v2 (see step 7) and the OTP policy fixed;
   the e2e suite enrols a real authenticator.
 
+## Preferences and email invitations (step 9)
+- **Personal outbid opt-out** (`009_notification_prefs.sql`): every admin or bidder login can turn outbid emails off for itself on
+  `/team` (API `GET/PUT /me/notifications`, audited). Results, cancellations and invoices are always sent. The database enforces
+  that the preference is personal: a customer may update its own row (`cu_self_prefs` policy) but, through it, only this column
+  (no self re-role or reactivation), and a customer admin cannot change anyone else's preference. `email_claim` skips opted-out
+  logins.
+- **Invitations by email** (`TEAM_INVITE_METHOD=email`, default `password`): the API creates the Keycloak user with **no credential**
+  and asks Keycloak to email a set-up link (`execute-actions-email`, valid `TEAM_INVITE_LIFESPAN_SECONDS`, default 24 h) that
+  makes the person choose a password and (by default) enrol TOTP. No secret passes through the API or the inviting admin. If the
+  email cannot be sent the Keycloak user is deleted, nothing is recorded, the call fails with `INVITE_EMAIL_FAILED` (502), and the
+  address can be used again. Needs the realm's SMTP settings (Realm settings → Email); `team.kc.spec` sets them to an in-process
+  SMTP catcher and follows both paths.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 143/143 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 146/146 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
 Admin API; web 26 unit tests and 11 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
@@ -282,13 +295,12 @@ through `docker compose exec`; the same admin operations were verified via the R
    unpaid invoices, count them explicitly.
 8. Changing a margin rule set takes effect on the next bid, including in live auctions. If brackets must be frozen per auction,
    snapshot them at scheduling time.
-9. Temporary passwords for new logins are shown once to the person who created them, who must pass them on (Keycloak can email a
-   set-up link instead once its own SMTP is configured; not wired yet). Notifications are email only (no SMS), and emails stay
+9. With the default `TEAM_INVITE_METHOD=password`, temporary passwords for new logins are shown once to the person who created
+   them, who must pass them on; set `TEAM_INVITE_METHOD=email` (with the realm's SMTP configured) to avoid that. Notifications are email only (no SMS), and emails stay
    queued — not sent — until `SMTP_URL` is set.
 10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
 11. Not built yet: credential vault for external-platform passwords, payments port, audit shipping, third-party penetration test.
 
 ## Next
-9. Load test on production-like hardware, including HTTP/WebSocket layers · Keycloak set-up-link emails for new logins ·
-   notification preferences ·
-10. Vault, payments, audit shipping to write-once storage, secret scanning, penetration test.
+10. Load test on production-like hardware, including the HTTP/WebSocket layers.
+11. Vault, payments, audit shipping to write-once storage, penetration test.

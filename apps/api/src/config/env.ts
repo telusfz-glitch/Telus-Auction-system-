@@ -23,6 +23,10 @@ const EnvSchema = z.object({
   KEYCLOAK_ADMIN_CLIENT_SECRET: z.string().min(16).optional(),
   // Required actions for new customer logins. Production keeps TOTP enrolment.
   TEAM_USER_REQUIRED_ACTIONS: z.string().default('UPDATE_PASSWORD,CONFIGURE_TOTP'),
+  // How new logins get their first credential: a temporary password shown once to the inviter, or a Keycloak email
+  // link (needs the realm's SMTP settings). Links expire after TEAM_INVITE_LIFESPAN_SECONDS.
+  TEAM_INVITE_METHOD: z.enum(['password', 'email']).default('password'),
+  TEAM_INVITE_LIFESPAN_SECONDS: z.coerce.number().int().min(300).max(7 * 86400).default(86400),
   // Rate limits shared by all instances when set (falls back to REDIS_URL, then to in-memory).
   RATE_LIMIT_REDIS_URL: z.string().url().optional(),
   // Notification emails (outbid, results, cancellations, invoices). Unset SMTP_URL ⇒ emails stay queued, none sent.

@@ -11,6 +11,9 @@ export class ApiCallError extends Error {
 }
 
 /** Server-side call to the API with the user's access token. The token never leaves this server. */
+// Server errors whose API message is written for users (no internals) and tells them what to do.
+const SAFE_5XX = new Set(['INVITE_EMAIL_FAILED']);
+
 export async function api<T>(session: Session, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const res = await fetch(`${env().API_URL}${path}`, {
     method: init.method ?? 'GET',
@@ -28,7 +31,7 @@ export async function api<T>(session: Session, path: string, init: { method?: st
     const code = typeof body?.code === 'string' ? body.code : `HTTP_${res.status}`;
     const message = res.status === 400 && Array.isArray(body?.issues)
       ? `Please check: ${body.issues.map((i: { path: string; message: string }) => `${i.path || 'input'} — ${i.message}`).join('; ')}`
-      : typeof body?.message === 'string' && res.status < 500 ? body.message : 'Something went wrong. Please try again.';
+      : typeof body?.message === 'string' && (res.status < 500 || SAFE_5XX.has(code)) ? body.message : 'Something went wrong. Please try again.';
     throw new ApiCallError(res.status, code, message);
   }
   return body as T;

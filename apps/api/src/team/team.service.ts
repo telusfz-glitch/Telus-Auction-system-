@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { CreateTeamUserInput, UpdateTeamUserInput } from '@telus/shared';
+import type { CreateTeamUserInput, NotificationPrefs, UpdateTeamUserInput } from '@telus/shared';
 import type { PoolClient } from 'pg';
 import { AuditService } from '../audit/audit.service';
 import type { Principal } from '../auth/principal';
@@ -8,7 +8,7 @@ import { mapPgError } from '../common/pg-errors';
 import { DbService } from '../db/db.service';
 import { KeycloakAdmin } from '../identity/keycloak-admin';
 
-const COLS = 'id, customer_id, keycloak_sub, email, display_name, role, status, created_at, updated_at';
+const COLS = 'id, customer_id, keycloak_sub, email, display_name, role, status, notify_outbid, created_at, updated_at';
 
 /**
  * Customer team logins. A customer admin manages their own company's logins; staff manage any customer's. Keycloak
@@ -96,6 +96,27 @@ export class TeamService {
       if (role !== row.role) await this.kc.setCustomerRole(row.keycloak_sub, cid, role);
       if (status !== row.status) await this.kc.setEnabled(row.keycloak_sub, cid, status === 'active');
       return after;
+    });
+  }
+
+  /** The signed-in login's own preferences. RLS (cu_self_prefs) plus the row guard confine the update to this one column of this one row. */
+  getPrefs(p: Principal): Promise<NotificationPrefs> {
+    return this.run(p, async (c) => {
+      const r = (await c.query('SELECT notify_outbid FROM customer_users WHERE keycloak_sub = $1 AND customer_id = $2', [p.sub, p.customerId])).rows[0];
+      if (!r) throw new ApiError('USER_NOT_FOUND', 'No team record exists for this login.', 404);
+      return { notifyOutbid: r.notify_outbid };
+    });
+  }
+
+  setPrefs(p: Principal, input: NotificationPrefs, ip?: string): Promise<NotificationPrefs> {
+    return this.run(p, async (c) => {
+      const r = (await c.query(
+        'UPDATE customer_users SET notify_outbid = $3 WHERE keycloak_sub = $1 AND customer_id = $2 RETURNING id, notify_outbid',
+        [p.sub, p.customerId, input.notifyOutbid])).rows[0];
+      if (!r) throw new ApiError('USER_NOT_FOUND', 'No team record exists for this login.', 404);
+      await this.audit.record(c, { actor: p, action: 'customer_user.notification_prefs', referenceType: 'customer_user', referenceId: r.id,
+        after: { notifyOutbid: input.notifyOutbid }, ip });
+      return { notifyOutbid: r.notify_outbid };
     });
   }
 }

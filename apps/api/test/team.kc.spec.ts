@@ -1,5 +1,8 @@
 import { randomUUID } from 'crypto';
+import { simpleParser, type ParsedMail } from 'mailparser';
+import type { AddressInfo } from 'net';
 import type { Pool } from 'pg';
+import { SMTPServer } from 'smtp-server';
 import { AuditService } from '../src/audit/audit.service';
 import type { Principal } from '../src/auth/principal';
 import { BidsService } from '../src/bids/bids.service';
@@ -173,5 +176,57 @@ const email = (who: string) => `${who}-${run}@team.test`;
     await expect(kc.setCustomerRole(bidderRow.keycloak_sub, CU.A, 'super_admin')).rejects.toThrow(/refusing to grant non-customer role/);
     await expect(kc.createCustomerUser({ email: email('x'), firstName: 'X', lastName: 'Y', customerId: CU.A, role: 'finance' }))
       .rejects.toThrow(/refusing to grant non-customer role/);
+  });
+
+  describe('TEAM_INVITE_METHOD=email', () => {
+    let smtp: SMTPServer, smtpDown = false, realmSmtp: unknown;
+    const inbox: ParsedMail[] = [];
+    const master = async (method: string, path: string, body?: unknown) => fetch(`${kcAdminUrl}${path}`, {
+      method, headers: { authorization: `Bearer ${await masterToken()}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const inviting = () => new TeamService(db, new AuditService(), new KeycloakAdmin({ ...env, TEAM_INVITE_METHOD: 'email', TEAM_INVITE_LIFESPAN_SECONDS: 3600 }));
+
+    beforeAll(async () => {
+      smtp = new SMTPServer({
+        authOptional: true, disabledCommands: ['STARTTLS'], logger: false,
+        onData(stream, _s, cb) {
+          if (smtpDown) { stream.resume(); return cb(Object.assign(new Error('mailbox unavailable'), { responseCode: 550 })); }
+          simpleParser(stream).then((m) => { inbox.push(m); cb(); }, cb);
+        },
+      });
+      await new Promise<void>((r) => smtp.listen(0, '127.0.0.1', r));
+      realmSmtp = (await (await master('GET', '')).json()).smtpServer ?? {};
+      // Keycloak runs on the host network in tests/CI, so it reaches this in-process catcher on 127.0.0.1.
+      const res = await master('PUT', '', { smtpServer: { host: '127.0.0.1', port: String((smtp.server.address() as AddressInfo).port), from: 'no-reply@auctions.telus.test' } });
+      expect(res.status).toBe(204);
+    });
+    afterAll(async () => {
+      await master('PUT', '', { smtpServer: realmSmtp });
+      await new Promise<void>((r) => smtp.close(() => r()));
+    });
+
+    it('the new login gets an emailed set-up link and NO credential; nothing secret is returned to the inviter', async () => {
+      const row = await inviting().create(firstAdmin, { email: email('invitee'), firstName: 'In', lastName: 'Vitee', role: 'customer_viewer' });
+      created.push(row.keycloak_sub);
+      expect(row.temporaryPassword).toBeNull();
+      expect(await (await master('GET', `/users/${row.keycloak_sub}/credentials`)).json()).toEqual([]);
+      expect((await kcGet(`/users/${row.keycloak_sub}`)).requiredActions.sort()).toEqual(['CONFIGURE_TOTP', 'UPDATE_PASSWORD']);
+      const m = inbox.at(-1)!;
+      expect((Array.isArray(m.to) ? m.to : [m.to!]).flatMap((a) => a.value.map((v) => v.address))).toEqual([email('invitee')]);
+      expect(m.text).toMatch(/\/realms\/telus\/login-actions\/action-token\?key=/);
+    });
+
+    it('if the invitation cannot be sent, the login is not created anywhere and the address stays usable', async () => {
+      smtpDown = true;
+      try {
+        await expect(inviting().create(firstAdmin, { email: email('unlucky'), firstName: 'Un', lastName: 'Lucky', role: 'customer_viewer' }))
+          .rejects.toMatchObject({ response: { code: 'INVITE_EMAIL_FAILED' } });
+      } finally { smtpDown = false; }
+      expect(await (await master('GET', `/users?exact=true&username=${encodeURIComponent(email('unlucky'))}`)).json()).toEqual([]);
+      expect((await team.list(firstAdmin)).map((u: any) => u.email)).not.toContain(email('unlucky'));
+      const retry = await inviting().create(firstAdmin, { email: email('unlucky'), firstName: 'Un', lastName: 'Lucky', role: 'customer_viewer' });
+      created.push(retry.keycloak_sub);
+      expect(retry.email).toBe(email('unlucky'));
+    });
   });
 });

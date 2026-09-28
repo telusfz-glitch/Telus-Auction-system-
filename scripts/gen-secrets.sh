@@ -39,6 +39,8 @@ SESSION_SECRET=$(r)
 # Notification emails from the API (outbid, results, cancellations, invoices). Unset = queued, not sent.
 # SMTP_URL=smtps://user:password@smtp.example.com:465
 # MAIL_FROM=TELUS Auctions <no-reply@auctions.telus.ae>
+# New customer logins: "password" (temporary password shown once) or "email" (Keycloak emails a set-up link; needs the realm SMTP).
+# TEAM_INVITE_METHOD=email
 PUBLIC_WEB_URL=http://localhost:3000
 ENVEOF
 chmod 600 .env

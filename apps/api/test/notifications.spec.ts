@@ -13,6 +13,8 @@ import { LifecycleService } from '../src/lifecycle/lifecycle.service';
 import { renderEmail } from '../src/notifications/email-templates';
 import { NotificationService } from '../src/notifications/notification.service';
 import { OutboxService } from '../src/outbox/outbox.service';
+import type { KeycloakAdmin } from '../src/identity/keycloak-admin';
+import { TeamService } from '../src/team/team.service';
 import { asStaff, custP, resetDb, setCloseIn, staffP } from './db-helpers';
 
 const ADMIN_URL = process.env.TEST_DB_ADMIN_URL;
@@ -145,6 +147,30 @@ const bBid = custP(CU.B, 'customer_bidder', 'b-bidder-sub');
     const m = inbox.at(-1)!;
     expect(to(m)).toEqual(['bidder@beta.test']);
     expect(m.text).toContain('The highest bid is now AED 1,234.50.');
+  });
+
+  it('a login that opted out of outbid emails is skipped; its preference is personal and nothing else can change through it', async () => {
+    const team = new TeamService(db, new AuditService(), {} as KeycloakAdmin);   // preferences never touch Keycloak
+    const aAdmin = custP(CU.A, 'customer_admin', 'a-admin-sub');
+    expect(await team.getPrefs(aAdmin)).toEqual({ notifyOutbid: true });
+    expect(await team.setPrefs(aAdmin, { notifyOutbid: false })).toEqual({ notifyOutbid: false });
+    await expect(team.getPrefs(custP(CU.A, 'customer_bidder', 'no-team-row'))).rejects.toMatchObject({ response: { code: 'USER_NOT_FOUND' } });
+
+    // Straight SQL as the customer, past the service: the row guard and RLS still hold.
+    const sql = (p: Principal, q: string) => db.withPrincipal(p, (c) => c.query(q));
+    await expect(sql(aBid, `UPDATE customer_users SET role = 'customer_admin' WHERE keycloak_sub = 'a-bidder-sub'`)).rejects.toMatchObject({ code: '42501' });
+    await expect(sql(aAdmin, `UPDATE customer_users SET status = 'suspended' WHERE keycloak_sub = 'a-admin-sub'`)).rejects.toMatchObject({ code: '42501' });
+    await expect(sql(aAdmin, `UPDATE customer_users SET notify_outbid = false WHERE keycloak_sub = 'a-bidder-sub'`)).rejects.toMatchObject({ code: '42501' });
+    expect((await sql(aBid, `UPDATE customer_users SET notify_outbid = false WHERE keycloak_sub <> 'a-bidder-sub'`)).rowCount).toBe(0);
+    expect((await sql(bBid, `UPDATE customer_users SET notify_outbid = false WHERE customer_id = '${CU.A}'`)).rowCount).toBe(0);
+
+    await bid(bBid, LOT.F1, 1300);                                                   // Alpha (leader at 1234.50) is outbid
+    await publish();
+    await deliver();
+    const m = inbox.at(-1)!;
+    expect(m.subject).toBe('Outbid on lot L1 — Open sale');
+    expect(to(m)).toEqual(['bidder@alpha.test']);                                   // the admin opted out
+    await team.setPrefs(aAdmin, { notifyOutbid: true });
   });
 
   it('SMTP failure: the email stays queued and is retried later; a redelivered event never duplicates it', async () => {
