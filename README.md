@@ -207,6 +207,9 @@ response).
 - **CI** (`.github/workflows/ci.yml`): production-dependency audit (fails on high), API typecheck and every suite against real
   Postgres 16, Redis 7 and Keycloak 26.0.7 (the `REQUIRE_*` runs fail instead of skipping when a service is missing), web
   typecheck, unit tests, production build and the Playwright suite.
+- **Secret scanning** in CI: gitleaks 8.28.0 (checksum-pinned) over the full history. `.gitleaks.toml` allow-lists only known test
+  fixtures, by value pattern (`test-…secret…`, `e2e-…secret…`, two JWT header prefixes), never by directory — a real key committed
+  into a test file is still reported (checked with planted GitHub/AWS keys).
 - **Dependencies:** NestJS 10 → 11 (clears `multer`/`body-parser` advisories), `postcss` and `uuid` overridden to patched releases.
   `npm audit --omit=dev`: 0 vulnerabilities.
 
@@ -283,8 +286,7 @@ through `docker compose exec`; the same admin operations were verified via the R
    set-up link instead once its own SMTP is configured; not wired yet). Notifications are email only (no SMS), and emails stay
    queued — not sent — until `SMTP_URL` is set.
 10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
-11. Not built yet: credential vault for external-platform passwords, payments port, audit shipping, secret scanning in CI,
-    third-party penetration test.
+11. Not built yet: credential vault for external-platform passwords, payments port, audit shipping, third-party penetration test.
 
 ## Next
 9. Load test on production-like hardware, including HTTP/WebSocket layers · Keycloak set-up-link emails for new logins ·

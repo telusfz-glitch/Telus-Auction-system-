@@ -33,6 +33,20 @@ jobs:
       # Fails on any known vulnerability of high severity or worse in production dependencies.
       - run: npm audit --omit=dev --audit-level=high
 
+  secrets:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Install gitleaks 8.28.0 (checksum-pinned)
+        run: |
+          curl -sSLo gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  gitleaks.tgz" | sha256sum -c -
+          tar xzf gitleaks.tgz gitleaks
+      # Every commit, with the narrow fixture allow-list in .gitleaks.toml. Findings are redacted in the log.
+      - run: ./gitleaks git --redact --no-banner --exit-code 1 .
+
   api:
     name: API — typecheck, unit, database, Redis, Keycloak
     runs-on: ubuntu-latest
