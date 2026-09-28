@@ -13,6 +13,12 @@ export type OutboxHandler = (events: OutboxEvent[]) => Promise<void> | void;
 export class OutboxService {
   constructor(private readonly db: DbService) {}
 
+  /** Deletes published events older than the retention period. Returns how many were removed. */
+  async purge(retentionDays: number): Promise<number> {
+    return this.db.withSystem('outbox', async (c) =>
+      (await c.query('SELECT outbox_purge(make_interval(days => $1)) AS n', [retentionDays])).rows[0].n as number);
+  }
+
   /** Publishes one batch. Returns how many events were delivered (0 ⇒ the outbox is drained). */
   async publishBatch(handler: OutboxHandler, limit = 200): Promise<number> {
     return this.db.withSystem('outbox', async (c) => {

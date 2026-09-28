@@ -90,6 +90,12 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     return { ok: true };
   }
 
+  /** Removes every socket of a customer from an auction room (on every instance, when the Redis adapter is on).
+   *  They cannot re-join: auction.subscribe re-checks access through RLS. */
+  evict(customerId: string, auctionId: string): void {
+    this.server?.in(rooms.customer(customerId)).socketsLeave(rooms.auction(auctionId));
+  }
+
   deliver(deliveries: Delivery[]): void {
     for (const d of deliveries) this.server?.to(d.room).emit(d.event, d.data);
   }

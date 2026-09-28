@@ -31,3 +31,9 @@ export async function asStaff(admin: Pool, fn: (c: PoolClient) => Promise<void>)
 export const custP = (customerId: string, customerRole: string, sub: string): Principal =>
   ({ sub, username: sub, kind: 'customer', roles: [customerRole], customerId, customerRole });
 export const staffP: Principal = { sub: 'staff-1', username: 'staff', kind: 'staff', roles: ['super_admin'], customerId: null, customerRole: null };
+
+/** Test-only clock control: moves an auction's close time as the OWNER with no RLS context. Staff are not allowed
+ *  to shorten a live auction (auctions_staff_guard), and `auctions` has no FORCE'd RLS, so this bypasses both. */
+export async function setCloseIn(admin: Pool, auctionId: string, interval: string): Promise<void> {
+  await admin.query('UPDATE auctions SET close_at = clock_timestamp() + $2::interval WHERE id = $1', [auctionId, interval]);
+}

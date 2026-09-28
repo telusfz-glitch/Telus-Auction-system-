@@ -10,7 +10,7 @@ import { configureApp } from '../src/bootstrap';
 import { loadEnv } from '../src/config/env';
 import { LifecycleService } from '../src/lifecycle/lifecycle.service';
 import { WorkersService } from '../src/workers/workers.service';
-import { asStaff, resetDb } from './db-helpers';
+import { asStaff, resetDb, setCloseIn } from './db-helpers';
 import { AUD, ISS, customerClaims, makeKeys, signToken, staffClaims } from './helpers';
 
 const ADMIN_URL = process.env.TEST_DB_ADMIN_URL;
@@ -70,7 +70,7 @@ interface Probe { socket: Socket; events: Array<[string, any]> }
       .overrideProvider(TokenVerifier).useValue(new TokenVerifier({ issuer: ISS, audience: AUD, getKey: async () => keys.publicKey }))
       .compile();
     app = mod.createNestApplication();
-    configureApp(app, loadEnv());
+    await configureApp(app, loadEnv());
     await app.listen(0, '127.0.0.1');
     url = await app.getUrl();
     workers = app.get(WorkersService);
@@ -136,7 +136,7 @@ interface Probe { socket: Socket; events: Array<[string, any]> }
   it('scheduler closes the auction → participants are told; winner sees the result; staff finalise over HTTP', async () => {
     const tB = await cust('customer_admin', CU.B, 'b-admin');
     const a = probes.find((p) => p.events.some(([e]) => e === 'lot.outbid'))!;
-    await asStaff(admin, async (c) => { await c.query(`UPDATE auctions SET close_at = clock_timestamp() WHERE id = $1`, [AU.HIDDEN]); });
+    await setCloseIn(admin, AU.HIDDEN, '0 seconds');
     expect((await lifecycle.tick()).closed).toEqual([AU.HIDDEN]);
     await publish();
     expect(a.events.at(-1)).toEqual(['auction.closed', { auctionId: AU.HIDDEN }]);

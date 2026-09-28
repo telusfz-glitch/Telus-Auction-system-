@@ -7,7 +7,7 @@ import { loadEnv } from './config/env';
 async function main() {
   const env = loadEnv();
   const app = await NestFactory.create(AppModule);
-  configureApp(app, env);
+  await configureApp(app, env);
   await app.listen(env.PORT);
 }
 main().catch((e) => { console.error(e); process.exit(1); });

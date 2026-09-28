@@ -7,7 +7,8 @@
     "migrate": "ts-node -r tsconfig-paths/register src/db/migrate.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest --runInBand",
-    "test:db": "REQUIRE_DB_TESTS=1 jest --runInBand test/rls.spec.ts test/bids.spec.ts test/lifecycle.spec.ts test/realtime.e2e.spec.ts"
+    "test:db": "REQUIRE_DB_TESTS=1 jest --runInBand test/rls.spec.ts test/bids.spec.ts test/lifecycle.spec.ts test/realtime.e2e.spec.ts test/admin.spec.ts",
+    "test:redis": "REQUIRE_REDIS_TESTS=1 jest --runInBand test/realtime-cluster.e2e.spec.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",
@@ -16,13 +17,15 @@
     "@nestjs/platform-socket.io": "^10.4.22",
     "@nestjs/throttler": "^6.2.1",
     "@nestjs/websockets": "^10.4.22",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@telus/shared": "*",
     "helmet": "^8.0.0",
     "jose": "^5.9.6",
     "pg": "^8.13.0",
+    "redis": "^4.7.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "socket.io": "^4.8.4",
+    "socket.io": "4.8.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -43,9 +46,13 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "roots": ["<rootDir>/test"],
+    "roots": [
+      "<rootDir>/test"
+    ],
     "testRegex": ".*\\.spec\\.ts$",
-    "moduleNameMapper": { "^@telus/shared$": "<rootDir>/../../packages/shared/src/index.ts" },
+    "moduleNameMapper": {
+      "^@telus/shared$": "<rootDir>/../../packages/shared/src/index.ts"
+    },
     "testTimeout": 30000
   }
 }

@@ -1,7 +1,8 @@
-# TELUS Auction Platform — v2 (secure foundation + bid engine + auction lifecycle)
+# TELUS Auction Platform — v2 (secure foundation + bid engine + auction lifecycle + staff admin)
 
-Steps 1–4 of the rebuild: monorepo, infrastructure, Keycloak identity, tenant isolation, the concurrency-safe bid engine, and the
-auction lifecycle (scheduler, allocation, finalisation into invoices, outbox → realtime push), with a security test suite.
+Steps 1–5 of the rebuild: monorepo, infrastructure, Keycloak identity, tenant isolation, the concurrency-safe bid engine, the
+auction lifecycle (scheduler, allocation, finalisation into invoices, outbox → realtime push), and the staff admin API (auctions,
+lots, invitations, margin rules, limits, security settings) with multi-instance realtime over Redis, plus a security test suite.
 The earlier single-file demo and the first Express backend are **prototypes** — this replaces them.
 (The v1 backend had a role-check bug that would have rejected every admin; it should not be deployed.)
 
@@ -16,10 +17,12 @@ apps/api/            NestJS API (TypeScript)
   src/lifecycle/     scheduler: scheduled→live→closed on the DB clock, lot allocation at close
   src/outbox/        at-least-once outbox publisher (claim → deliver → mark, one transaction)
   src/realtime/      Socket.IO gateway (/realtime) + routing.ts, the confidentiality rules for pushed events
-  src/workers/       in-process loops that run the scheduler and the publisher
+  src/workers/       in-process loops that run the scheduler, the publisher and the outbox purge
+  src/admin/         staff admin API: auctions, lots, invitations, customers' status/limits/margin rules, security settings
   db/migrations/     001_init.sql (tenancy, RLS, audit chain) · 002_bid_engine.sql (lots, margin rules, DB bid invariants)
                      003_lifecycle.sql (close-vs-bid locking, lot_results, invoice_lines, outbox claim, terms acceptance)
-  test/              105 tests (see below)
+                     004_admin.sql (status-transition / freeze guards, withdrawn-lot bid guard, cancel notice, outbox purge)
+  test/              see "Honest status" for the count
 packages/shared/     Zod schemas + role names shared by API and (later) web
 infra/keycloak/      telus realm (roles, PKCE client, brute-force, password policy) + create-user.sh
 infra/postgres/init/ creates the restricted `telus_app` runtime role
@@ -39,6 +42,8 @@ TEMP_PASSWORD='<one-time>' infra/keycloak/create-user.sh admin@telus.ae super_ad
 Tests: `npm test` (DB-free) · `TEST_DB_ADMIN_URL=… TEST_DB_APP_URL=… npm run test:db` (needs Postgres; the OWNER role must be non-superuser, like production; the suite drops the
 `public` schema and **refuses to run unless the database name contains "test"**). The owner must be able to `CREATE EXTENSION`
 (pgcrypto and btree_gist are trusted extensions, so owning the database is enough on PG 13+).
+`TEST_DB_ADMIN_URL=… TEST_DB_APP_URL=… TEST_REDIS_URL=redis://… npm run test:redis -w @telus/api` runs two API instances against one
+Redis to prove cross-instance realtime delivery.
 
 ## Security model (what is enforced, and where)
 | Threat | Control | Proven by |
@@ -60,6 +65,10 @@ Tests: `npm test` (DB-free) · `TEST_DB_ADMIN_URL=… TEST_DB_APP_URL=… npm ru
 | Unauthenticated / stale sockets; eavesdropping on other auctions | token verified at handshake, disconnect at token expiry, auction rooms joined only after an RLS check | `realtime.e2e.spec` |
 | Customer tampering with participation (self-invite, un-accept terms) | RLS policy + guard trigger: only `terms_accepted_at`, only once | `lifecycle.spec` |
 | Rewriting results or invoicing a lot twice | `lot_results` append-only; `invoice_lines.lot_id` unique; one invoice per auction+customer | `lifecycle.spec` |
+| Staff (or buggy code) changing a running auction's rules | guard triggers: only legal status transitions; timing/visibility/lots frozen once started (close may only be extended) | `admin.spec` (raw SQL refused) |
+| Bids on a withdrawn lot | per-lot lock shared by withdraw, engine and a bid trigger that re-checks `active` | `admin.spec` (API and raw SQL) |
+| Over-broad staff powers | per-endpoint roles: managers run auctions, finance sets limits, only super_admin changes security settings | `admin.spec` (403 matrix) |
+| Revoked customer still listening | revoke evicts their sockets from the auction room on every instance; re-subscribe is RLS-checked | `realtime-cluster.e2e.spec` |
 
 
 ## Bid engine (step 3) — how correctness is guaranteed
@@ -100,11 +109,33 @@ bypassed. The suite ran 10× in a row with no failures and no deadlocks logged.
   `lot.price` only in `full_price` auctions. Staff receive every raw event.
 - **Customer HTTP:** `GET /auctions`, `GET /auctions/:id` (with lots), `POST /auctions/:id/accept-terms` (admin/bidder; idempotent, first
   acceptance is the record), `GET /auctions/:id/my-results`. **Staff:** `GET /admin/auctions/:id/results`.
-- Env: `WORKERS_ENABLED` (default `true`), `SCHEDULER_INTERVAL_MS` (1000), `OUTBOX_INTERVAL_MS` (250).
+- Env: `WORKERS_ENABLED` (default `true`), `SCHEDULER_INTERVAL_MS` (1000), `OUTBOX_INTERVAL_MS` (250),
+  `OUTBOX_RETENTION_DAYS` (30; published events older than this are purged hourly), `REDIS_URL` (optional, see below).
+
+## Staff admin API (step 5)
+All routes are under `/admin`, validated by `.strict()` Zod schemas (`packages/shared`), audited with before/after values in the same
+transaction, and backed by database guard triggers (`004_admin.sql`) so the rules hold even if application code is wrong.
+
+| Area | Routes | Roles |
+|---|---|---|
+| Auctions | `GET /auctions`, `GET /auctions/:id` (lots with live price/leader, participants), `POST /auctions` (creates a **draft**), `PATCH /auctions/:id` (draft/scheduled only), `POST /auctions/:id/schedule` (needs ≥1 lot, ≥1 invitee, a future close), `/unschedule`, `/cancel` (also a live auction: waits for in-flight bids, notifies participants) | read: all staff · write: super_admin, auction_manager |
+| Lots | `POST /auctions/:id/lots` (bulk, ≤1000), `PATCH /lots/:id`, `DELETE /lots/:id` (draft/scheduled), `POST /lots/:id/withdraw` (up to live) | super_admin, auction_manager |
+| Invitations | `POST /auctions/:id/participants {customerIds}` (re-admitting keeps terms acceptance), `DELETE /auctions/:id/participants/:customerId` (soft revoke) | super_admin, auction_manager |
+| Customers | `PATCH /customers/:id {status, marginRuleSetId}` · `PUT /customers/:id/limits {maxPurchaseValue}` | managers · super_admin, finance |
+| Margin rules | `GET /margin-rule-sets`, `POST /margin-rule-sets {name, brackets}`, `PUT /margin-rule-sets/:id/brackets` (atomic replace; overlaps → 422) | read: all staff · write: managers |
+| Security | `GET /security-settings`, `PATCH /security-settings` | read: all staff · write: super_admin |
+
+Auction lifecycle for staff: `draft → scheduled → (scheduler) live → (scheduler) closed → finalized`, with `cancelled` reachable from
+draft/scheduled/live and `archived` from finalized/cancelled. Staff can never set `live` or `closed` themselves.
+
+**Multiple API instances:** set `REDIS_URL` on every instance. Socket.IO rooms are then shared through the Redis adapter, so an event
+published by whichever instance's worker claimed it reaches sockets connected to any instance.
 
 ## Honest status: verified vs not
-**Verified here:** typecheck clean; 105/105 tests pass (5 consecutive full runs, no deadlocks logged), the database ones against a real
-PostgreSQL 16 using the restricted runtime role and a non-superuser owner. The realtime suite runs the real AppModule over real sockets. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
+**Verified here:** typecheck clean; 122/122 tests pass (5 consecutive full runs, no deadlocks logged), the database ones against a real
+PostgreSQL 16 using the restricted runtime role and a non-superuser owner. The realtime and admin suites run the real AppModule over
+real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
+checked to fail when the protection they cover is removed. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
 
 **Not measured:** throughput. A hot lot serialises its bidders and each bid makes ~10 queries; on your hardware that likely means tens to a
@@ -124,19 +155,19 @@ and `customer_id` appears for customer users.
 3. Migrations here run as a superuser (`telus_owner` in the dev image). Production should use a separate non-superuser owner role.
 4. Audit chain stops tampering by application code and by the owner *unless they drop the triggers*. Stream `audit_logs` to
    write-once storage (S3 Object Lock) to close that.
-5. **Realtime is single-instance.** Each instance's publisher pushes only to sockets connected to *that* instance. Running more than one
-   API instance needs the Socket.IO Redis adapter (Redis is already in the compose file) — until then run one instance, or run the
-   workers on one and route all sockets to it. Rate limits are per-instance for the same reason.
-6. A customer whose invitation is revoked mid-auction keeps receiving that auction's *public* room events (timer, and price in
-   `full_price` mode) until their socket reconnects, at most one access-token lifetime (5 min). Their own position events are unaffected.
-7. The outbox is never purged; add a retention job (e.g. delete published rows older than 30 days) before it grows large.
-8. The exposure check stops counting an auction's lots once it is `finalized` (existing step-3 rule). If purchase limits should include
+5. **API rate limits are per instance** (in-memory throttler). With several instances behind a load balancer the effective limit
+   multiplies; move the throttler storage to Redis before scaling out. Socket connections are not rate-limited beyond the handshake.
+6. Suspending or blocking a *customer* stops their bids immediately (engine check), but their already-open sockets keep receiving
+   public room events until their token expires (≤5 min). Revoking an *invitation* evicts them at once (see step 5).
+7. The exposure check stops counting an auction's lots once it is `finalized` (existing step-3 rule). If purchase limits should include
    unpaid invoices, count them explicitly.
-9. No HTTP endpoints yet for staff to create/schedule auctions and lots, invite customers, manage margin rule sets, customer limits or
-   the security settings (the tables, RLS and engine support exist and are tested). No out-of-band notifications (email/SMS) for outbid/won.
+8. Changing a margin rule set takes effect on the next bid, including in live auctions. If brackets must be frozen per auction,
+   snapshot them at scheduling time.
+9. No out-of-band notifications (email/SMS) for outbid/won/cancelled; no Excel/CSV import for lots (the bulk JSON endpoint takes up to
+   1000 lots per call, so an importer only needs to parse the file and call it).
 10. Not built yet: web app, child-login provisioning via the Keycloak Admin API, credential vault for external-platform passwords,
     payments port, dependency/secret scanning in CI, third-party penetration test.
 
 ## Next
-5. Staff admin endpoints (auctions, lots, invitations, margin rules, limits, security settings, Excel import) + Socket.IO Redis adapter ·
-6. Next.js web app on Keycloak (Auth.js, tokens kept server-side) · 7. Vault, payments, audit shipping, CI security scanning, penetration test.
+6. Next.js web app on Keycloak (Auth.js, tokens kept server-side), including the staff console over the step-5 API · Excel lot import ·
+   Redis-backed rate limits · 7. Vault, payments, notifications, audit shipping, CI security scanning, penetration test.

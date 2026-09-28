@@ -8,7 +8,7 @@ import type { Env } from '../src/config/env';
 import { DbService } from '../src/db/db.service';
 import { LifecycleService } from '../src/lifecycle/lifecycle.service';
 import { OutboxService, type OutboxEvent } from '../src/outbox/outbox.service';
-import { asStaff, custP, resetDb, staffP } from './db-helpers';
+import { asStaff, custP, resetDb, setCloseIn, staffP } from './db-helpers';
 
 const ADMIN_URL = process.env.TEST_DB_ADMIN_URL;
 const APP_URL = process.env.TEST_DB_APP_URL;
@@ -37,8 +37,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const bid = (p: Principal, lotId: string, amount: number) => bids.place(p, { lotId, amount, idempotencyKey: randomUUID() });
   const codeOf = (pr: Promise<unknown>) => pr.then(() => 'OK', (e: any) => (e.getResponse ? e.getResponse().code : `ERR:${e.code ?? e.message}`));
   const asStaffRows = async (sql: string, params: unknown[] = []) => db.withPrincipal(staffP, async (c) => (await c.query(sql, params)).rows);
-  const setClose = (auctionId: string, interval: string) =>
-    asStaff(admin, async (c) => { await c.query(`UPDATE auctions SET close_at = clock_timestamp() + $2::interval WHERE id = $1`, [auctionId, interval]); });
+  const setClose = (auctionId: string, interval: string) => setCloseIn(admin, auctionId, interval);
 
   beforeAll(async () => {
     admin = await resetDb(ADMIN_URL!);

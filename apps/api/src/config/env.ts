@@ -13,6 +13,9 @@ const EnvSchema = z.object({
   WORKERS_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   SCHEDULER_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1000),
   OUTBOX_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(250),
+  OUTBOX_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+  // Set when running more than one API instance: Socket.IO rooms are then shared through Redis.
+  REDIS_URL: z.string().url().optional(),
 });
 export type Env = z.infer<typeof EnvSchema>;
 

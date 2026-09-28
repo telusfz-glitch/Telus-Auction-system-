@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { createRemoteJWKSet } from 'jose';
+import { AdminAuctionsService } from './admin/admin-auctions.service';
+import { AdminSettingsService } from './admin/admin-settings.service';
+import { AdminController } from './admin/admin.controller';
 import { AppController } from './app.controller';
 import { AuctionsController } from './auctions/auctions.controller';
 import { AuctionsService } from './auctions/auctions.service';
@@ -23,7 +26,7 @@ import { WorkersService } from './workers/workers.service';
 
 @Module({
   imports: [ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }])],
-  controllers: [AppController, CustomersController, BidsController, AuctionsController],
+  controllers: [AppController, CustomersController, BidsController, AuctionsController, AdminController],
   providers: [
     { provide: ENV, useFactory: () => loadEnv() },
     {
@@ -43,6 +46,8 @@ import { WorkersService } from './workers/workers.service';
     AuditService,
     BidsService,
     AuctionsService,
+    AdminAuctionsService,
+    AdminSettingsService,
     LifecycleService,
     OutboxService,
     RealtimeGateway,

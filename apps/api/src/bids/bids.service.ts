@@ -29,6 +29,7 @@ export interface PlacedBid { bidId: string; replayed: boolean; closeAt: string; 
 function mapDbError(err: unknown): unknown {
   const e = err as { code?: string; message?: string };
   if (e?.code === 'P0001' && e.message === 'AUCTION_NOT_OPEN') return new BidRejected('AUCTION_NOT_OPEN', 'This auction is not open for bidding.', 409);
+  if (e?.code === 'P0001' && e.message === 'LOT_UNAVAILABLE') return new BidRejected('LOT_UNAVAILABLE', 'This lot is no longer available.', 409);
   if (e?.code === 'P0001' && e.message === 'BID_NOT_HIGHER') return new BidRejected('BID_CONFLICT', 'Another bid was placed first. Please review the current position and retry.', 409);
   return err;
 }

@@ -14,7 +14,7 @@ describe('Full app wiring — real AppModule + real security configuration', () 
     });
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = mod.createNestApplication();
-    configureApp(app, loadEnv());
+    await configureApp(app, loadEnv());
     await app.init();
   });
   afterAll(() => app.close());

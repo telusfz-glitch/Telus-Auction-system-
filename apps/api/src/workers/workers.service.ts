@@ -7,9 +7,10 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { route } from '../realtime/routing';
 
 /**
- * In-process background loops: the auction scheduler (every second) and the outbox publisher (every 250 ms, draining
- * the backlog each time). Each loop never overlaps itself. Both are safe with several API instances running — the
- * database serialises transitions and SKIP LOCKED splits the outbox — but see README for the realtime fan-out caveat.
+ * In-process background loops: the auction scheduler (every second), the outbox publisher (every 250 ms, draining
+ * the backlog each time) and the outbox purge (hourly). Each loop never overlaps itself. All are safe with several
+ * API instances running: the database serialises transitions, SKIP LOCKED splits the outbox, and with REDIS_URL set
+ * the pushes reach sockets connected to every instance.
  */
 @Injectable()
 export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
@@ -29,6 +30,7 @@ export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
     if (!this.env.WORKERS_ENABLED) return;
     this.every('scheduler', this.env.SCHEDULER_INTERVAL_MS, () => this.lifecycle.tick());
     this.every('outbox', this.env.OUTBOX_INTERVAL_MS, () => this.drainOutbox());
+    this.every('outbox-purge', 3_600_000, () => this.outbox.purge(this.env.OUTBOX_RETENTION_DAYS));
   }
 
   /** Publishes until the outbox is empty (or shutdown starts). */

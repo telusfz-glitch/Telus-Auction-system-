@@ -1,12 +1,14 @@
-import type { INestApplication } from '@nestjs/common';
+import { Logger, type INestApplication } from '@nestjs/common';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import helmet from 'helmet';
-import type { ServerOptions } from 'socket.io';
+import { createClient } from 'redis';
+import type { Server, ServerOptions } from 'socket.io';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 import type { Env } from './config/env';
 
 /** Shared by main.ts and the e2e tests, so tests exercise the real security configuration. */
-export function configureApp(app: INestApplication, env: Env): void {
+export async function configureApp(app: INestApplication, env: Env): Promise<void> {
   const server = app.getHttpAdapter().getInstance();
   server.disable('x-powered-by');
   server.set('trust proxy', env.TRUST_PROXY);
@@ -26,18 +28,38 @@ export function configureApp(app: INestApplication, env: Env): void {
     allowedHeaders: ['authorization', 'content-type', 'idempotency-key'],
     maxAge: 600,
   });
-  app.useWebSocketAdapter(new SecureIoAdapter(app, origins));
+  const io = new SecureIoAdapter(app, origins);
+  if (env.REDIS_URL) await io.connectToRedis(env.REDIS_URL);
+  app.useWebSocketAdapter(io);
   app.useGlobalFilters(new AllExceptionsFilter());
   app.enableShutdownHooks();
 }
 
-/** Socket.IO with the same origin allow-list as HTTP, small frames, and no long-polling downgrade path. */
+/**
+ * Socket.IO with the same origin allow-list as HTTP, small frames, and no long-polling downgrade path. With a Redis
+ * URL, rooms are shared across API instances (a push emitted on one instance reaches sockets on all of them).
+ */
 class SecureIoAdapter extends IoAdapter {
+  private readonly logger = new Logger('Realtime');
+  private redisAdapter?: ReturnType<typeof createAdapter>;
+  private redisClients: Array<ReturnType<typeof createClient>> = [];
+
   constructor(app: INestApplication, private readonly origins: string[]) {
     super(app);
   }
+
+  async connectToRedis(url: string): Promise<void> {
+    const pub = createClient({ url });
+    const sub = pub.duplicate();
+    // Log the error class only: the connection URL carries the Redis password.
+    for (const c of [pub, sub]) c.on('error', (e: Error) => this.logger.error(`redis: ${e.name}: ${e.message.replace(/\/\/[^@]*@/, '//***@')}`));
+    await Promise.all([pub.connect(), sub.connect()]);
+    this.redisClients = [pub, sub];
+    this.redisAdapter = createAdapter(pub, sub, { key: 'telus-realtime' });
+  }
+
   override createIOServer(port: number, options?: ServerOptions) {
-    return super.createIOServer(port, {
+    const server: Server = super.createIOServer(port, {
       ...options,
       cors: { origin: this.origins, credentials: false },
       transports: ['websocket'],
@@ -45,5 +67,13 @@ class SecureIoAdapter extends IoAdapter {
       pingInterval: 20_000,
       pingTimeout: 20_000,
     });
+    if (this.redisAdapter) server.adapter(this.redisAdapter);
+    return server;
+  }
+
+  override async close(server: Server): Promise<void> {
+    await super.close(server);
+    await Promise.allSettled(this.redisClients.map((c) => c.quit()));
+    this.redisClients = [];
   }
 }

@@ -44,6 +44,9 @@ export function route(ev: OutboxEvent): Delivery[] {
     case 'auction.opened':
       out.push({ room: rooms.auction(auctionId), event: 'auction.opened', data: { auctionId, closeAt: p['closeAt'] } });
       return out;
+    case 'auction.cancelled':
+      out.push({ room: rooms.auction(auctionId), event: 'auction.cancelled', data: { auctionId } });
+      return out;
     case 'auction.closed':
       // Lot counts are staff information; participants fetch their own results over HTTP.
       out.push({ room: rooms.auction(auctionId), event: 'auction.closed', data: { auctionId } });
