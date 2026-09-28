@@ -9,7 +9,7 @@ export class DbService implements OnModuleDestroy {
   private readonly pool: Pool;
 
   constructor(@Inject(ENV) env: Env) {
-    this.pool = new Pool({ connectionString: env.DATABASE_URL, max: 20, idleTimeoutMillis: 30_000, statement_timeout: 10_000 });
+    this.pool = new Pool({ connectionString: env.DATABASE_URL, max: env.DB_POOL_MAX ?? 20, idleTimeoutMillis: 30_000, statement_timeout: 10_000 });
   }
 
   /**

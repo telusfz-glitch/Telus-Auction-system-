@@ -3,6 +3,8 @@ import { z } from 'zod';
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+  // Connections per API instance. Keep instances × DB_POOL_MAX below Postgres max_connections.
+  DB_POOL_MAX: z.coerce.number().int().min(2).max(500).default(20),
   DATABASE_URL: z.string().url(),
   KEYCLOAK_ISSUER: z.string().url(),
   KEYCLOAK_JWKS_URI: z.string().url().optional(),
@@ -29,6 +31,8 @@ const EnvSchema = z.object({
   TEAM_INVITE_LIFESPAN_SECONDS: z.coerce.number().int().min(300).max(7 * 86400).default(86400),
   // Rate limits shared by all instances when set (falls back to REDIS_URL, then to in-memory).
   RATE_LIMIT_REDIS_URL: z.string().url().optional(),
+  // Requests per minute per route, per signed-in user (anonymous requests: per client address). Some routes set their own.
+  RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(120),
   // Notification emails (outbid, results, cancellations, invoices). Unset SMTP_URL ⇒ emails stay queued, none sent.
   // e.g. smtps://user:pass@smtp.example.com:465 — the password is never logged.
   SMTP_URL: z.string().url().optional(),

@@ -39,7 +39,7 @@ import { WorkersService } from './workers/workers.service';
       useFactory: () => {
         const env = loadEnv();
         const url = env.RATE_LIMIT_REDIS_URL ?? env.REDIS_URL;
-        return { throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }], storage: url ? new RedisThrottlerStorage(url) : undefined };
+        return { throttlers: [{ name: 'default', ttl: 60_000, limit: env.RATE_LIMIT_PER_MINUTE }], storage: url ? new RedisThrottlerStorage(url) : undefined };
       },
     }),
   ],
@@ -74,10 +74,10 @@ import { WorkersService } from './workers/workers.service';
     TeamService,
     InvoicesService,
     WorkersService,
-    // Guard order matters: rate-limit → authenticate → authorize. All global, so new routes (and socket
-    // handlers) are protected by default.
-    { provide: APP_GUARD, useClass: HttpThrottlerGuard },
+    // Guard order matters: authenticate → rate-limit (per user; see http-throttler.guard.ts) → authorize. All global,
+    // so new routes (and socket handlers) are protected by default.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: HttpThrottlerGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })

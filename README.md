@@ -82,7 +82,7 @@ database `telus_e2e_test`; Redis on :6380 with password `testpw`. These are test
 | Identity leaking between pooled connections | transaction-local `set_config` | `rls.spec` |
 | Mass assignment / bad input | Zod `.strict()` schemas on every body | (schemas in `packages/shared`) |
 | Info leaks in errors; missing headers; open CORS | global exception filter, helmet (CSP/HSTS/…), allow-listed CORS | `app.e2e.spec` |
-| Brute force | Keycloak lockout (5 failures) + API rate limit (120/min/IP) | config only — see below |
+| Brute force | Keycloak lockout (5 failures) + API rate limit (120/min per route per signed-in user; anonymous: per address) | `ratelimit.e2e.spec` |
 | A bid slipping in after the winner was computed | bids hold a shared auction lock, the closer takes it exclusively | `lifecycle.spec` (held-open bid is included; fails without the lock) |
 | Push channel leaking prices or competitor identity | pure routing rules; customer rooms carry only their own position; price only in `full_price` | `routing.spec`, `realtime.e2e.spec` |
 | Unauthenticated / stale sockets; eavesdropping on other auctions | token verified at handshake, disconnect at token expiry, auction rooms joined only after an RLS check | `realtime.e2e.spec` |
@@ -202,6 +202,10 @@ response).
 - **Excel lot import** on the staff auction page: first sheet, row-1 headers `Lot, Description, Quantity, Starting price
   [, Fallback increment]` (common aliases accepted), ≤2 MB, ≤1000 lots, prices exact to the cent. Every bad row is reported by
   number and nothing is imported unless the whole sheet is valid.
+- **Rate limits per signed-in user** (fixed in step 10): the limiter runs after authentication and counts an authenticated
+  request against its user, per route (`RATE_LIMIT_PER_MINUTE`, default 120; bids 20 per 10 s; new logins 20 per hour).
+  Previously it counted per client address, and since the web app calls the API server-to-server, every customer shared one
+  bucket (the whole platform would have been limited to 20 bids per 10 s). Only anonymous requests are counted per address.
 - **Rate limits shared across instances** through Redis (`RATE_LIMIT_REDIS_URL`, else `REDIS_URL`), atomic in a Lua script. If
   Redis is down the check fails **open** (logged) so a Redis outage cannot stop an auction.
 - **CI** (`.github/workflows/ci.yml`): production-dependency audit (fails on high), API typecheck and every suite against real
@@ -238,8 +242,15 @@ response).
   address can be used again. Needs the realm's SMTP settings (Realm settings → Email); `team.kc.spec` sets them to an in-process
   SMTP catcher and follows both paths.
 
+## Per-user rate limits and full-stack load test (step 10)
+- **Bug fixed:** rate limits were counted per client address, but all customer traffic reaches the API from the web server, so
+  one busy bidder could have exhausted the bid limit for every customer. Limits are now per signed-in user (see step 7);
+  `ratelimit.e2e.spec` sends everything from one address and fails against the old guard.
+- **`npm run load:http`**: the HTTP + Socket.IO load test described under "Measured" below. `DB_POOL_MAX` (default 20) sets the
+  connections per API instance; keep instances × `DB_POOL_MAX` below Postgres `max_connections`.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 146/146 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 149/149 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
 Admin API; web 26 unit tests and 11 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
@@ -259,7 +270,26 @@ Tuning = shortening the per-lot critical section: price-independent reads (limit
 lot lock (still under the customer lock, which keeps them race-free), an early lock-free rejection of bids that are already too low
 (safe: a lot's price only rises), and fewer round trips after the insert. After every run the load script checks that each lot's
 state equals the top of its ledger (it always has). Most rejected bids in the table are `BID_TOO_LOW` races, as in a real bidding
-war. Not measured: the HTTP/WebSocket layers under load, and Postgres on production hardware — load-test there before an event.
+war.
+
+**Measured through HTTP and Socket.IO (step 10):** `LOAD_DB_ADMIN_URL=… LOAD_DB_APP_URL=… LOAD_REDIS_URL=… npm run load:http -w
+@telus/api -- [--bidders 200 --viewers 1000 --instances 2 --seconds 30]` starts real API processes (two, sharing Redis), signs
+tokens with a throw-away key served from a local JWKS endpoint (verified exactly like Keycloak's), and drives them: bidders bid over
+HTTP about once a second, each learning prices only from its own socket and from `BID_TOO_LOW` answers, as a real client would, in a
+`full_price` auction whose every accepted bid is pushed to every spectator. Same 4-vCPU sandbox, now also running both API
+processes and the load generator:
+
+| 200 bidders, 2 API instances, 30 s | bids/s (accepted) | bid HTTP p50 / p95 | "you lead" push p50 / p95 | spectator push p50 / p95 | pushes missed |
+|---|---|---|---|---|---|
+| no spectators | 193 (135) | 26 / 100 ms | 89 / 182 ms | — | — |
+| 300 spectators | 186 (122) | 47 / 225 ms | 103 / 229 ms | 114 / 247 ms | 0 of 1,096,500 |
+| 1,000 spectators | 157 (80) | 184 / 467 ms | 247 / 489 ms | 280 / 539 ms | 0 of 2,408,000 |
+
+Push latency is measured from the moment the bid is sent and includes the outbox poll (`OUTBOX_INTERVAL_MS`, 250 ms by default:
+~125 ms on average). The API instances used ~0.5–0.6 of a core each; the single-threaded load generator was the busiest process,
+and at 1,000 spectators its own event loop lagged (p99 285 ms, printed by the script), so that row's latencies overstate the
+system's. Integrity was checked after every run (ledger = lot state, no unpublished outbox events). Still not measured:
+Postgres and the API on production hardware, with the generator on separate machines — do that before a large event.
 
 **Keycloak, now verified:** the realm imports; the `telus-api` audience and `customer_id` mappers work in real access tokens (the
 e2e suite logs in real users and the API accepts their tokens). Loading the realm found a real bug: Keycloak 24+ **silently dropped**
@@ -299,8 +329,10 @@ through `docker compose exec`; the same admin operations were verified via the R
    them, who must pass them on; set `TEAM_INVITE_METHOD=email` (with the realm's SMTP configured) to avoid that. Notifications are email only (no SMS), and emails stay
    queued — not sent — until `SMTP_URL` is set.
 10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
+   Requests with an invalid token are refused (401) before they are counted, so floods of them must be absorbed at the edge
+   (proxy / WAF); the API only spends a signature check on each.
 11. Not built yet: credential vault for external-platform passwords, payments port, audit shipping, third-party penetration test.
 
 ## Next
-10. Load test on production-like hardware, including the HTTP/WebSocket layers.
+10. Run `load:http` on production-like hardware (generator on separate machines) before a large event.
 11. Vault, payments, audit shipping to write-once storage, penetration test.
