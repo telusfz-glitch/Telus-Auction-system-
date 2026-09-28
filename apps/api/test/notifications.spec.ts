@@ -191,6 +191,31 @@ const bBid = custP(CU.B, 'customer_bidder', 'b-bidder-sub');
     expect(inv).toEqual(['ops@alpha.test|Invoice INV-N-HID-CUST-0001 — AED 2,500.00', 'ops@beta.test|Invoice INV-N-HID-CUST-0002 — AED 1,200.00']);
   });
 
+  it('two publishers whose batches reach the same emails in opposite orders never deadlock, and queue each email once', async () => {
+    // Batch 1 = [K1, K2], batch 2 = [K2, K1] (K1 = Alpha outbid on H1, K2 = Beta outbid on H1). A temporary trigger slows
+    // every queue insert so both publishers are guaranteed to hold their first key before asking for the second:
+    // enqueueing in event order deadlocks every time; enqueueing in dedupe-key order must not.
+    const lotId = LOT.H2;
+    await admin.query('DELETE FROM email_queue WHERE dedupe_key LIKE $1', [`outbid:%:${lotId}:%`]);
+    const ev = (prev: string, leader: string) => JSON.stringify({ lotId, auctionId: AU.HID, amount: '1.00', leaderCustomerId: leader,
+      previousLeaderCustomerId: prev, visibility: 'winning_losing_only', extended: false });
+    const ids: string[] = (await admin.query(
+      `INSERT INTO outbox_events (type, payload, published_at) SELECT 'bid.accepted', x, now() FROM unnest($1::jsonb[]) WITH ORDINALITY AS t(x, o) ORDER BY o RETURNING id`,
+      [[ev(CU.A, CU.B), ev(CU.B, CU.A), ev(CU.B, CU.A), ev(CU.A, CU.B)]])).rows.map((r) => r.id);
+    await admin.query(`CREATE FUNCTION test_slow_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.3); RETURN NEW; END $$;
+                       CREATE TRIGGER test_slow BEFORE INSERT ON email_queue FOR EACH ROW EXECUTE FUNCTION test_slow_insert();`);
+    try {
+      const enqueue = (batch: string[]) => db.withSystem('test', (c) => c.query('SELECT email_enqueue_for_events($1::bigint[])', [batch]));
+      const results = await Promise.allSettled([enqueue([ids[0]!, ids[1]!]), enqueue([ids[2]!, ids[3]!])]);
+      expect(results.map((r) => (r.status === 'rejected' ? (r.reason as { code?: string }).code : 'ok'))).toEqual(['ok', 'ok']);
+    } finally {
+      await admin.query('DROP TRIGGER test_slow ON email_queue; DROP FUNCTION test_slow_insert();');
+    }
+    const keys = (await queue()).filter((q) => q.dedupe_key.includes(lotId)).map((q) => q.dedupe_key);
+    expect(keys).toHaveLength(2);                                                   // one email per company, no duplicates
+    await admin.query(`UPDATE email_queue SET status = 'skipped' WHERE dedupe_key LIKE $1 AND status = 'pending'`, [`outbid:%:${lotId}:%`]);
+  });
+
   it('a cancelled live auction tells every invited company', async () => {
     const before = inbox.length;
     await asStaff(admin, async (c) => { await c.query(`UPDATE auctions SET status = 'cancelled' WHERE id = $1`, [AU.CAN]); });

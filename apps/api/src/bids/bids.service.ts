@@ -98,41 +98,63 @@ export class BidsService {
       throw new BidRejected('RANGE_LIMIT', `Bids must be between AED ${st.rmin} and AED ${st.rmax}.`, 422, {}, true);
     }
 
-    // 4. Serialise everyone bidding on THIS lot from here on; read the price only after taking the lock.
+    // 4. Everything that does not depend on this lot's current price is read BEFORE taking the lot lock, so the lock is
+    //    held for as few round trips as possible (a hot lot serialises every bidder on it). These reads stay race-free:
+    //    the customer lock (step 1) serialises this customer's own bids, and others can only LOWER this customer's
+    //    exposure (by outbidding them elsewhere), which keeps the check conservative.
+    const [brackets, seen] = await Promise.all([
+      c.query(
+        `SELECT b.price_from::text AS f, b.price_to::text AS t, b.margin::text AS m FROM margin_rule_brackets b
+           JOIN customers cu ON cu.margin_rule_set_id = b.rule_set_id WHERE cu.id = $1`, [customerId]),
+      c.query('SELECT highest_amount::text AS highest FROM lot_price_state($1)', [lot.id]),
+    ].map((q) => q.then((r) => r.rows)));
+    const minNextAt = (highest: string | undefined) => {
+      if (highest === undefined) return toCents(lot.starting_price);
+      const h = toCents(highest);
+      const br = brackets.find((b) => h >= toCents(b.f) && h < toCents(b.t));
+      return h + toCents(br ? br.m : lot.fallback_increment);
+    };
+    const tooLow = (minNext: bigint) =>
+      new BidRejected('BID_TOO_LOW', 'Your bid is too low.', 422, auction.bid_visibility === 'full_price' ? { minNextBid: fromCents(minNext) } : {});
+    // Early rejection without the lot lock: a lot's price only ever rises (the trigger accepts strictly higher bids
+    // only), so a bid already below the minimum at an earlier price is certainly too low. The authoritative check
+    // is repeated under the lock below.
+    const early = minNextAt(seen[0]?.highest);
+    if (amount < early) throw tooLow(early);
+
+    const [limits, other] = await Promise.all([
+      c.query('SELECT max_purchase_value::text AS v FROM customer_limits WHERE customer_id = $1', [customerId]),
+      c.query(
+        `SELECT coalesce(sum(s.highest_amount * l.quantity), 0)::text AS total
+           FROM lot_bid_state s JOIN auction_lots l ON l.id = s.lot_id JOIN auctions au ON au.id = l.auction_id
+          WHERE s.leader_customer_id = $1 AND s.lot_id <> $2 AND au.status IN ('live','closing','closed','under_review')`, [customerId, lot.id]),
+    ].map((q) => q.then((r) => r.rows)));
+    const capacity = toCents(limits[0] ? limits[0].v : '0');
+    const otherTotal = toCents(other[0].total);
+
+    // 5. Serialise everyone bidding on THIS lot from here on; read the price only after taking the lock (a separate
+    //    statement: a single statement would read the price with a snapshot taken before the lock was granted).
     await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [lot.id]);
     const price = (await c.query('SELECT highest_amount::text AS highest FROM lot_price_state($1)', [lot.id])).rows[0];
 
-    let minNext = toCents(lot.starting_price);
-    if (price) {
-      const inc = (await c.query(
-        `SELECT b.margin::text AS margin FROM margin_rule_brackets b JOIN customers cu ON cu.margin_rule_set_id = b.rule_set_id
-          WHERE cu.id = $1 AND $2::numeric >= b.price_from AND $2::numeric < b.price_to LIMIT 1`, [customerId, price.highest])).rows[0];
-      minNext = toCents(price.highest) + toCents(inc ? inc.margin : lot.fallback_increment);
-    }
-    if (amount < minNext) {
-      // The minimum next bid reveals the current price, so it is disclosed ONLY when the auction is 'full_price'.
-      throw new BidRejected('BID_TOO_LOW', 'Your bid is too low.', 422, auction.bid_visibility === 'full_price' ? { minNextBid: fromCents(minNext) } : {});
-    }
+    // The minimum next bid reveals the current price, so it is disclosed ONLY when the auction is 'full_price'.
+    const minNext = minNextAt(price?.highest);
+    if (amount < minNext) throw tooLow(minNext);
 
-    // 5. Exposure: value of everything this customer currently leads (excluding this lot, which this bid replaces).
-    const limits = (await c.query('SELECT max_purchase_value::text AS v FROM customer_limits WHERE customer_id = $1', [customerId])).rows[0];
-    const other = (await c.query(
-      `SELECT coalesce(sum(s.highest_amount * l.quantity), 0)::text AS total
-         FROM lot_bid_state s JOIN auction_lots l ON l.id = s.lot_id JOIN auctions au ON au.id = l.auction_id
-        WHERE s.leader_customer_id = $1 AND s.lot_id <> $2 AND au.status IN ('live','closing','closed','under_review')`, [customerId, lot.id])).rows[0];
-    const capacity = toCents(limits ? limits.v : '0');
-    const projected = toCents(other.total) + amount * BigInt(lot.quantity);
+    // 6. Exposure: value of everything this customer currently leads (excluding this lot, which this bid replaces).
+    const projected = otherTotal + amount * BigInt(lot.quantity);
     if (projected > capacity) {
-      throw new BidRejected('EXPOSURE_LIMIT', 'This bid would exceed your purchasing limit.', 422, { remainingCapacity: fromCents(capacity > toCents(other.total) ? capacity - toCents(other.total) : 0n) }, true);
+      throw new BidRejected('EXPOSURE_LIMIT', 'This bid would exceed your purchasing limit.', 422, { remainingCapacity: fromCents(capacity > otherTotal ? capacity - otherTotal : 0n) }, true);
     }
 
-    // 6. Insert. The trigger re-checks open/higher atomically and updates price, extension and outbox.
+    // 7. Insert. The trigger re-checks open/higher atomically and updates price, extension and outbox.
     const inserted = await c.query(
       `INSERT INTO bids (auction_id, lot_id, customer_id, acting_user_sub, amount, idempotency_key, request_hash, ip)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
       [lot.auction_id, lot.id, customerId, p.sub, fromCents(amount), input.idempotencyKey, requestHash, ip && isIP(ip) ? ip : null]);
-    const flag = (await c.query("SELECT current_setting('app.last_bid_extended', true) AS f")).rows[0].f;
-    return { bidId: String(inserted.rows[0].id), replayed: false, closeAt: await this.closeAt(c, lot.auction_id), extended: flag === '1' };
+    const after = (await c.query(
+      "SELECT current_setting('app.last_bid_extended', true) AS f, close_at FROM auctions WHERE id = $1", [lot.auction_id])).rows[0];
+    return { bidId: String(inserted.rows[0].id), replayed: false, closeAt: new Date(after.close_at).toISOString(), extended: after.f === '1' };
   }
 
   /** What a customer may know about their own position on a lot. Never leaks a competitor's price or identity. */

@@ -223,15 +223,27 @@ response).
   the e2e suite enrols a real authenticator.
 
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 142/142 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 143/143 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
 Admin API; web 26 unit tests and 11 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
 checked to fail when the protection they cover is removed, as was the web refresh-lock test. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
 
-**Not measured:** throughput. A hot lot serialises its bidders and each bid makes ~10 queries; on your hardware that likely means tens to a
-few hundred bids/second per lot. Load-test before an event, and collapse the reads into one CTE if it is not enough.
+**Measured (bid engine against Postgres 16, 4 vCPU sandbox shared with Keycloak/Redis — treat as a floor, not a capacity plan):**
+`LOAD_DB_ADMIN_URL=… LOAD_DB_APP_URL=… npm run load -w @telus/api -- --seconds 15 --bidders 40` (resets a `*_test` database).
+
+| 40 concurrent bidders, 15 s | requests/s | accepted bids/s | p50 | p95 | p99 |
+|---|---|---|---|---|---|
+| **Hot lot** (all on one lot) — before tuning | 257 | 108 | 152 ms | 202 ms | 267 ms |
+| **Hot lot** — after tuning | ~405 | **~155** | 95 ms | 129 ms | 163 ms |
+| **Spread** over 199 lots — after tuning | ~595 | **~258** | 66 ms | 96 ms | 110 ms |
+
+Tuning = shortening the per-lot critical section: price-independent reads (limits, exposure, margin brackets) moved before the
+lot lock (still under the customer lock, which keeps them race-free), an early lock-free rejection of bids that are already too low
+(safe: a lot's price only rises), and fewer round trips after the insert. After every run the load script checks that each lot's
+state equals the top of its ledger (it always has). Most rejected bids in the table are `BID_TOO_LOW` races, as in a real bidding
+war. Not measured: the HTTP/WebSocket layers under load, and Postgres on production hardware — load-test there before an event.
 
 **Keycloak, now verified:** the realm imports; the `telus-api` audience and `customer_id` mappers work in real access tokens (the
 e2e suite logs in real users and the API accepts their tokens). Loading the realm found a real bug: Keycloak 24+ **silently dropped**
@@ -272,8 +284,9 @@ through `docker compose exec`; the same admin operations were verified via the R
    queued — not sent — until `SMTP_URL` is set.
 10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
 11. Not built yet: credential vault for external-platform passwords, payments port, audit shipping, secret scanning in CI,
-    third-party penetration test, load test.
+    third-party penetration test.
 
 ## Next
-9. Load test and query tuning for hot lots · Keycloak set-up-link emails for new logins · notification preferences ·
+9. Load test on production-like hardware, including HTTP/WebSocket layers · Keycloak set-up-link emails for new logins ·
+   notification preferences ·
 10. Vault, payments, audit shipping to write-once storage, secret scanning, penetration test.

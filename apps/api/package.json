@@ -9,7 +9,8 @@
     "test": "jest --runInBand",
     "test:db": "REQUIRE_DB_TESTS=1 jest --runInBand test/rls.spec.ts test/bids.spec.ts test/lifecycle.spec.ts test/realtime.e2e.spec.ts test/admin.spec.ts test/notifications.spec.ts",
     "test:redis": "REQUIRE_REDIS_TESTS=1 jest --runInBand test/realtime-cluster.e2e.spec.ts",
-    "test:kc": "REQUIRE_KEYCLOAK_TESTS=1 jest --runInBand test/team.kc.spec.ts"
+    "test:kc": "REQUIRE_KEYCLOAK_TESTS=1 jest --runInBand test/team.kc.spec.ts",
+    "load": "ts-node -r tsconfig-paths/register test/load/bid-load.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.6",
