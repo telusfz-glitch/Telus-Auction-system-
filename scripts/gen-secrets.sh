@@ -41,6 +41,9 @@ SESSION_SECRET=$(r)
 # MAIL_FROM=TELUS Auctions <no-reply@auctions.telus.ae>
 # New customer logins: "password" (temporary password shown once) or "email" (Keycloak emails a set-up link; needs the realm SMTP).
 # TEAM_INVITE_METHOD=email
+# Audit log copy to write-once storage (bucket must have S3 Object Lock enabled; AWS credentials from the usual chain).
+# AUDIT_SHIP_BUCKET=telus-audit-prod
+# AUDIT_SHIP_REGION=me-central-1
 PUBLIC_WEB_URL=http://localhost:3000
 ENVEOF
 chmod 600 .env

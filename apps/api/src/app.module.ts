@@ -15,6 +15,7 @@ import { BidsService } from './bids/bids.service';
 import { HttpThrottlerGuard } from './auth/http-throttler.guard';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
+import { AuditShipperService } from './audit/audit-shipper.service';
 import { TokenVerifier } from './auth/token-verifier';
 import { loadEnv, type Env } from './config/env';
 import { ENV } from './config/tokens';
@@ -73,6 +74,7 @@ import { WorkersService } from './workers/workers.service';
     KeycloakAdmin,
     TeamService,
     InvoicesService,
+    AuditShipperService,
     WorkersService,
     // Guard order matters: authenticate → rate-limit (per user; see http-throttler.guard.ts) → authorize. All global,
     // so new routes (and socket handlers) are protected by default.

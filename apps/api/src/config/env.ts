@@ -33,6 +33,15 @@ const EnvSchema = z.object({
   RATE_LIMIT_REDIS_URL: z.string().url().optional(),
   // Requests per minute per route, per signed-in user (anonymous requests: per client address). Some routes set their own.
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(120),
+  // Audit shipping to write-once storage (S3 Object Lock). Unset bucket ⇒ not shipped. The bucket must have Object Lock
+  // enabled; credentials come from the AWS default chain. AUDIT_SHIP_ENDPOINT is for S3-compatible stores.
+  AUDIT_SHIP_BUCKET: z.string().min(3).optional(),
+  AUDIT_SHIP_PREFIX: z.string().regex(/^([A-Za-z0-9._-]+\/)*$/).default('audit/'),
+  AUDIT_SHIP_REGION: z.string().min(1).default('us-east-1'),
+  AUDIT_SHIP_ENDPOINT: z.string().url().optional(),
+  AUDIT_SHIP_RETENTION_DAYS: z.coerce.number().int().min(1).max(36500).default(2557),   // ~7 years
+  AUDIT_SHIP_INTERVAL_MS: z.coerce.number().int().min(1000).max(86_400_000).default(60_000),
+  AUDIT_SHIP_BATCH: z.coerce.number().int().min(1).max(10000).default(5000),
   // Notification emails (outbid, results, cancellations, invoices). Unset SMTP_URL ⇒ emails stay queued, none sent.
   // e.g. smtps://user:pass@smtp.example.com:465 — the password is never logged.
   SMTP_URL: z.string().url().optional(),

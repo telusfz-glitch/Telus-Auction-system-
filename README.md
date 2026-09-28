@@ -249,8 +249,37 @@ response).
 - **`npm run load:http`**: the HTTP + Socket.IO load test described under "Measured" below. `DB_POOL_MAX` (default 20) sets the
   connections per API instance; keep instances × `DB_POOL_MAX` below Postgres `max_connections`.
 
+## Audit log shipped to write-once storage (step 11)
+- **What it closes:** the in-database hash chain stops tampering by the application and by anyone who does not drop the
+  triggers. A database owner who drops them could rewrite history *and recompute the whole chain* so `verify_audit_chain()`
+  passes again. Now the audit log is copied, in batches, to an S3 bucket with **Object Lock in COMPLIANCE mode**: until its
+  retention date nobody — not the database owner, not the bucket owner, not AWS support — can change or delete a batch.
+- **How** (`src/audit`, `010_audit_shipping.sql`): a worker (every `AUDIT_SHIP_INTERVAL_MS`, one instance at a time) takes the
+  rows after the last shipped one, refuses to ship if they do not form an intact chain, writes them as deterministic NDJSON
+  (`audit/<first id>-<last id>.ndjson`, header + one line per row, in the exact text the hash is computed from) with a
+  SHA-256 checksum and COMPLIANCE retention (`AUDIT_SHIP_RETENTION_DAYS`, default ~7 years), then records it in the append-only
+  `audit_shipments` table — which only accepts a batch that continues the shipped chain. A crash between upload and record
+  is recovered (the rebuilt batch is byte-identical and recognised).
+- **`npm run audit:verify -w @telus/api`** (exit 0 = intact, 2 = problems): checks the locked copy on its own (checksums, lock,
+  chain across objects, recomputed hashes) and then the database against it — every shipped row still present and identical,
+  nothing inserted into a shipped range, the unshipped tail continuing the chain, every recorded batch present in the bucket.
+  Run it on a schedule from a separate account and alert on a non-zero exit.
+- **Set up:** a bucket created with Object Lock enabled; the API's role needs `s3:PutObject`, `s3:PutObjectRetention`,
+  `s3:GetObject`, `s3:ListBucket` on it (the verifier needs only the read permissions, including `s3:GetObjectRetention`);
+  set `AUDIT_SHIP_BUCKET` (and `AUDIT_SHIP_REGION`, or `AUDIT_SHIP_ENDPOINT` for an S3-compatible store).
+- **Tests** (`audit-ship.spec`, against real Postgres and moto's S3 with Object Lock): batching and retention, a locked object
+  refusing deletion (403) and overwrite (412), crash recovery, two concurrent shippers, a DB owner who drops the triggers,
+  edits a shipped row, deletes another and re-chains everything (the database's own check is fooled; the verifier names each
+  changed and deleted row), and the shipper refusing to ship a broken chain.
+
+## Product walkthrough (demo)
+`DEMO=1 npx playwright test e2e/demo.spec.ts` in `apps/web` (same stack as the e2e suite) plays a whole auction in real
+browsers — staff build and open it, two companies bid against each other with live updates, it closes, invoices are issued and
+finance settles one — and saves numbered screenshots plus each bidder's browser video to `apps/web/demo-output/`
+(`DEMO_OUT` to change). It is skipped in normal test runs.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 149/149 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 157/157 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
 Admin API; web 26 unit tests and 11 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
@@ -316,8 +345,10 @@ through `docker compose exec`; the same admin operations were verified via the R
 3. `sslRequired: external` and `start-dev` are **dev settings**. Production: `sslRequired: all`, `kc start` behind TLS with a real
    hostname, `https` issuer (the API already refuses a non-https issuer when `NODE_ENV=production`).
 4. Migrations here run as a superuser (`telus_owner` in the dev image). Production should use a separate non-superuser owner role.
-5. Audit chain stops tampering by application code and by the owner *unless they drop the triggers*. Stream `audit_logs` to
-   write-once storage (S3 Object Lock) to close that.
+5. The audit chain alone stops tampering by application code and by the owner *unless they drop the triggers*; shipping to
+   S3 Object Lock (step 11) closes that for everything shipped. Rows written since the last shipment (≤ `AUDIT_SHIP_INTERVAL_MS`)
+   are protected only by the chain, and the `ip` column is not part of the hash (it is protected once shipped). Shipping is
+   off until `AUDIT_SHIP_BUCKET` is set, and `audit:verify` must actually be scheduled and alerted on.
 6. A suspended login loses its web session at once (back-channel logout) and cannot bid; an already-open *socket* keeps receiving
    public auction events until its access token expires (≤5 min). Suspending a whole *customer* stops bids immediately but does not
    end its users' sessions (suspend the logins too, or revoke the invitation, which evicts sockets at once).
@@ -331,8 +362,8 @@ through `docker compose exec`; the same admin operations were verified via the R
 10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
    Requests with an invalid token are refused (401) before they are counted, so floods of them must be absorbed at the edge
    (proxy / WAF); the API only spends a signature check on each.
-11. Not built yet: credential vault for external-platform passwords, payments port, audit shipping, third-party penetration test.
+11. Not built yet: credential vault for external-platform passwords, payments port, third-party penetration test.
 
 ## Next
 10. Run `load:http` on production-like hardware (generator on separate machines) before a large event.
-11. Vault, payments, audit shipping to write-once storage, penetration test.
+11. Vault, payments, penetration test.

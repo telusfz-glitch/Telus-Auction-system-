@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import type { Env } from '../config/env';
 import { ENV } from '../config/tokens';
+import { AuditShipperService } from '../audit/audit-shipper.service';
 import { LifecycleService } from '../lifecycle/lifecycle.service';
 import { NotificationService } from '../notifications/notification.service';
 import { OutboxService } from '../outbox/outbox.service';
@@ -26,6 +27,7 @@ export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly outbox: OutboxService,
     private readonly gateway: RealtimeGateway,
     private readonly notifications: NotificationService,
+    private readonly auditShipper: AuditShipperService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -34,6 +36,12 @@ export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
     this.every('outbox', this.env.OUTBOX_INTERVAL_MS, () => this.drainOutbox());
     this.every('outbox-purge', 3_600_000, () => this.outbox.purge(this.env.OUTBOX_RETENTION_DAYS));
     if (this.notifications.enabled) this.every('email', this.env.EMAIL_INTERVAL_MS, () => this.drainEmail());
+    if (this.auditShipper.enabled) this.every('audit-ship', this.env.AUDIT_SHIP_INTERVAL_MS, () => this.drainAudit());
+  }
+
+  /** Ships audit batches until caught up (or shutdown starts). */
+  async drainAudit(): Promise<void> {
+    while (!this.stopped && (await this.auditShipper.shipBatch()) > 0);
   }
 
   /** Publishes until the outbox is empty (or shutdown starts). */
