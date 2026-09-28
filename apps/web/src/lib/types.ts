@@ -32,3 +32,13 @@ export interface AdminResults {
 export interface AdminCustomer { id: string; code: string; company_name: string; contact_email: string; status: string; created_at: string }
 export interface RuleSet { id: string; name: string; brackets: Array<{ priceFrom: string; priceTo: string; margin: string }>; customer_count: number }
 export interface SecuritySettings { max_bid_limit: string; range_enabled: boolean; range_min: string; range_max: string; updated_at: string }
+export interface TeamUser {
+  id: string; customer_id: string; keycloak_sub: string; email: string | null; display_name: string;
+  role: 'customer_admin' | 'customer_bidder' | 'customer_viewer'; status: 'active' | 'suspended'; created_at: string;
+}
+export interface Invoice {
+  id: string; invoice_number: string; customer_id: string; total_amount: string; status: 'unpaid' | 'paid' | 'void';
+  created_at: string; settled_at: string | null; settlement_note: string | null; auction_number: string | null; auction_name: string | null;
+  customer_code: string; company_name: string;
+  lines: Array<{ lotNumber: string; description: string; quantity: number; unitPrice: string; amount: string }>;
+}

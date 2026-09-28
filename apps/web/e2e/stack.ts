@@ -14,7 +14,11 @@ export const STACK = {
   dbAppUrl: e.E2E_DB_APP_URL ?? 'postgres://telus_app:app@localhost:5433/telus_e2e_test',
   redisUrl: e.E2E_REDIS_URL ?? 'redis://:testpw@127.0.0.1:6380/2',
   sessionSecret: 'e2e-session-secret-0123456789abcdef-0123456789',
+  apiAdminSecret: e.E2E_API_ADMIN_CLIENT_SECRET ?? 'e2e-api-admin-secret-0123456789',
 };
+
+/** Logins the tests create through the app itself (removed from Keycloak before each run). */
+export const CREATED_IN_TEST = ['newbidder@alpha.test'];
 
 export const PASSWORD = 'E2e-Passw0rd!2026-telus';
 export const CUSTOMER = {
@@ -24,6 +28,7 @@ export const CUSTOMER = {
 export const USERS = {
   manager: { email: 'manager@telus.test', role: 'auction_manager', first: 'Mona', last: 'Manager' },
   viewOnly: { email: 'viewonly@telus.test', role: 'view_only', first: 'Vera', last: 'Viewer' },
+  finance: { email: 'finance@telus.test', role: 'finance', first: 'Fay', last: 'Finance' },
   alphaAdmin: { email: 'admin@alpha.test', role: 'customer_admin', customerId: CUSTOMER.alpha.id, first: 'Ali', last: 'Alpha' },
   alphaViewer: { email: 'viewer@alpha.test', role: 'customer_viewer', customerId: CUSTOMER.alpha.id, first: 'Amal', last: 'Alpha' },
   betaBidder: { email: 'bidder@beta.test', role: 'customer_bidder', customerId: CUSTOMER.beta.id, first: 'Bilal', last: 'Beta' },

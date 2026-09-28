@@ -1,4 +1,5 @@
 import { CUSTOMER_STATUSES } from '@telus/shared';
+import Link from 'next/link';
 import { createCustomerAction, setLimitAction, updateCustomerAction } from '@/app/actions/admin';
 import { ActionForm } from '@/components/ActionForm';
 import { api } from '@/lib/api';
@@ -28,7 +29,7 @@ export default async function Customers() {
           <tbody>
             {customers.map((c) => (
               <tr key={c.id}>
-                <td><strong>{c.code}</strong><br />{c.company_name}</td>
+                <td><Link href={`/admin/customers/${c.id}`}><strong>{c.code}</strong></Link><br />{c.company_name}</td>
                 <td>{c.contact_email}</td>
                 <td>
                   {manager ? (

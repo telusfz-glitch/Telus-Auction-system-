@@ -74,6 +74,9 @@ export class BidsService {
 
     const customer = (await c.query('SELECT status FROM customers WHERE id = $1', [customerId])).rows[0];
     if (!customer || customer.status !== 'active') throw new BidRejected('CUSTOMER_NOT_ACTIVE', 'Your account is not active for bidding.', 403);
+    // A suspended login is disabled in Keycloak at once, but an access token already issued lives on (≤5 min): stop it here.
+    const login = (await c.query('SELECT status FROM customer_users WHERE keycloak_sub = $1', [p.sub])).rows[0];
+    if (login?.status === 'suspended') throw new BidRejected('LOGIN_SUSPENDED', 'Your login has been suspended.', 403, {}, true);
 
     const part = (await c.query('SELECT is_allowed, terms_accepted_at FROM auction_participants WHERE auction_id = $1 AND customer_id = $2', [lot.auction_id, customerId])).rows[0];
     if (!part || !part.is_allowed) throw new BidRejected('LOT_NOT_FOUND', 'Lot not found.', 404);

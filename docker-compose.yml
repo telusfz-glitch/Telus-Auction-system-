@@ -27,7 +27,7 @@ services:
     volumes: [redisdata:/data]
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0
+    image: quay.io/keycloak/keycloak:26.0.7   # the version the realm file is tested against
     command: ["start-dev", "--import-realm"]
     environment:
       KC_DB: postgres
@@ -40,6 +40,7 @@ services:
       # Placeholders substituted into telus-realm.json at import (the web app's confidential client).
       TELUS_WEB_URL: ${TELUS_WEB_URL:?run scripts/gen-secrets.sh}
       TELUS_WEB_CLIENT_SECRET: ${TELUS_WEB_CLIENT_SECRET:?run scripts/gen-secrets.sh}
+      TELUS_API_ADMIN_CLIENT_SECRET: ${TELUS_API_ADMIN_CLIENT_SECRET:?run scripts/gen-secrets.sh}
     volumes:
       - ./infra/keycloak/telus-realm.json:/opt/keycloak/data/import/telus-realm.json:ro
     ports: ["127.0.0.1:8080:8080"]

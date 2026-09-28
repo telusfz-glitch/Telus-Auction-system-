@@ -110,6 +110,23 @@
       "name": "TELUS API (resource server)",
       "enabled": true,
       "bearerOnly": true
+    },
+    {
+      "clientId": "telus-api-admin",
+      "name": "TELUS API — customer login management (service account)",
+      "description": "Used only by the API to create/suspend customer team logins. Holds user-management roles only.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${TELUS_API_ADMIN_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "frontchannelLogout": false,
+      "attributes": {
+        "access.token.lifespan": "120"
+      }
     }
   ],
   "components": {
@@ -124,5 +141,20 @@
         }
       }
     ]
-  }
+  },
+  "users": [
+    {
+      "username": "service-account-telus-api-admin",
+      "enabled": true,
+      "serviceAccountClientId": "telus-api-admin",
+      "clientRoles": {
+        "realm-management": [
+          "manage-users",
+          "view-users",
+          "query-users",
+          "view-realm"
+        ]
+      }
+    }
+  ]
 }

@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # Throwaway credentials for the ephemeral CI services (see scripts/ci/prepare-services.sh).
+  TEST_DB_ADMIN_URL: postgres://telus_owner:owner@localhost:5432/telus_test
+  TEST_DB_APP_URL: postgres://telus_app:app@localhost:5432/telus_test
+  TEST_REDIS_URL: redis://localhost:6379
+  TEST_KEYCLOAK_ISSUER: http://localhost:8080/realms/telus
+  TEST_KEYCLOAK_ADMIN_SECRET: e2e-api-admin-secret-0123456789
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      # Fails on any known vulnerability of high severity or worse in production dependencies.
+      - run: npm audit --omit=dev --audit-level=high
+
+  api:
+    name: API — typecheck, unit, database, Redis, Keycloak
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: scripts/ci/prepare-services.sh
+      - run: npm run typecheck -w @telus/api
+      # With the TEST_* variables set, `npm test` runs every suite, including DB, Redis-cluster and Keycloak ones.
+      - run: npm test -w @telus/api
+      # The same suites again with REQUIRE_*: a missing service fails the build instead of skipping silently.
+      - run: npm run test:db -w @telus/api && npm run test:redis -w @telus/api && npm run test:kc -w @telus/api
+
+  web:
+    name: Web — typecheck, unit, build, end-to-end
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      E2E_DB_ADMIN_URL: postgres://telus_owner:owner@localhost:5432/telus_e2e_test
+      E2E_DB_APP_URL: postgres://telus_app:app@localhost:5432/telus_e2e_test
+      E2E_REDIS_URL: redis://localhost:6379/2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: scripts/ci/prepare-services.sh
+      - run: npm run typecheck -w @telus/web
+      - run: npm test -w @telus/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      # Builds the production web app, starts it and the API, and drives Chromium through real Keycloak logins.
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          retention-days: 7

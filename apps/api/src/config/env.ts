@@ -18,6 +18,13 @@ const EnvSchema = z.object({
   REDIS_URL: z.string().url().optional(),
   // Enables POST /realtime/tickets (browser sockets without access tokens). Used for nothing else.
   REALTIME_TICKET_SECRET: z.string().min(32).optional(),
+  // Customer team logins (Keycloak Admin API, service account `telus-api-admin`). Unset ⇒ team endpoints return 503.
+  KEYCLOAK_ADMIN_CLIENT_ID: z.string().min(1).default('telus-api-admin'),
+  KEYCLOAK_ADMIN_CLIENT_SECRET: z.string().min(16).optional(),
+  // Required actions for new customer logins. Production keeps TOTP enrolment.
+  TEAM_USER_REQUIRED_ACTIONS: z.string().default('UPDATE_PASSWORD,CONFIGURE_TOTP'),
+  // Rate limits shared by all instances when set (falls back to REDIS_URL, then to in-memory).
+  RATE_LIMIT_REDIS_URL: z.string().url().optional(),
 });
 export type Env = z.infer<typeof EnvSchema>;
 

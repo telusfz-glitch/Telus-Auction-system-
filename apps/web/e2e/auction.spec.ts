@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import ExcelJS from 'exceljs';
 import { Pool } from 'pg';
 import { createClient } from 'redis';
 import { keyOf, seal, unseal } from '../src/lib/crypto';
@@ -90,6 +91,23 @@ test('staff: create a draft, add lots, invite customers, schedule → the schedu
     await page.getByRole('button', { name: 'Add lot' }).click();
     await expect(lotRow(page, no)).toBeVisible();
   }
+  // Excel import: a sheet with a bad row imports nothing; a good sheet imports every row.
+  const xlsx = async (rows: unknown[][]) => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Lots');
+    rows.forEach((r) => ws.addRow(r));
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  };
+  const upload = async (buffer: Buffer) => {
+    await page.locator('input[type=file]').setInputFiles({ name: 'lots.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer });
+    await page.getByRole('button', { name: 'Import from Excel' }).click();
+  };
+  await upload(await xlsx([['Lot', 'Description', 'Quantity', 'Starting price'], ['L3', 'Pixel 8', 4, 900], ['L4', '', 0, 'abc']]));
+  await expect(page.getByText(/Nothing imported\. Row 3:/)).toBeVisible();
+  await expect(lotRow(page, 'L3')).toHaveCount(0);
+  await upload(await xlsx([['Lot No.', 'Model', 'Qty', 'Starting price (AED)'], ['L3', 'Pixel 8 128GB', 4, 900], ['L4', 'iPad Air M2', 3, 1250.5]]));
+  await expect(page.getByText('2 lot(s) imported.')).toBeVisible();
+  await expect(lotRow(page, 'L4')).toContainText('AED 1,250.50');
   await page.getByLabel('Customers').selectOption([{ label: 'CUST-0001 · Alpha Trading LLC (active)' }, { label: 'CUST-0002 · Beta Mobile FZE (active)' }]);
   await page.getByRole('button', { name: 'Invite' }).click();
   await expect(page.getByTestId('participants')).toContainText('Alpha Trading LLC');
@@ -179,6 +197,76 @@ test('two customers bid; positions update live over the socket; hidden prices st
   await expect(alpha.page.locator('#username')).toBeVisible();
 
   for (const u of [alpha, beta, staff]) await u.ctx.close();
+});
+
+test('invoices: the winner sees theirs; only finance can settle it', async ({ browser }) => {
+  const alpha = await newUser(browser, 'alphaAdmin');
+  await alpha.page.getByRole('link', { name: 'Invoices' }).click();
+  const inv = alpha.page.getByTestId('invoice-INV-E2E-001-CUST-0001');
+  await expect(inv).toContainText('AED 1,200.00');
+  await expect(inv).toContainText('unpaid');
+  await expect(alpha.page.getByTestId(/invoice-.*CUST-0002/)).toHaveCount(0);
+
+  const mgr = await newUser(browser, 'manager');
+  await mgr.page.goto('/admin/invoices');
+  await expect(mgr.page.getByTestId('invoice-INV-E2E-001-CUST-0001')).toBeVisible();
+  await expect(mgr.page.getByRole('button', { name: 'Mark paid' })).toHaveCount(0);   // auction managers do not settle money
+
+  const fin = await newUser(browser, 'finance');
+  await fin.page.goto('/admin/invoices');
+  const row = fin.page.getByTestId('invoice-INV-E2E-001-CUST-0001');
+  await row.getByPlaceholder('Payment reference').fill('TT-2026-0042');
+  await row.getByRole('button', { name: 'Mark paid' }).click();
+  await expect(row).toContainText('TT-2026-0042');
+  await expect(row.getByRole('button', { name: 'Mark paid' })).toHaveCount(0);   // settled once, for good
+  await alpha.page.reload();
+  await expect(inv).toContainText('paid');
+  await expect(inv).toContainText('TT-2026-0042');
+  for (const u of [alpha, mgr, fin]) await u.ctx.close();
+});
+
+test('team: a customer admin creates a login; the new person must set a password; suspension blocks sign-in', async ({ browser }) => {
+  const alpha = await newUser(browser, 'alphaAdmin');
+  await alpha.page.getByRole('link', { name: 'Team' }).click();
+  await alpha.page.getByLabel('Email').fill('newbidder@alpha.test');
+  await alpha.page.getByLabel('First name').fill('Nadia');
+  await alpha.page.getByLabel('Last name').fill('New');
+  await alpha.page.getByLabel('Role').selectOption('customer_bidder');
+  await alpha.page.getByRole('button', { name: 'Create login' }).click();
+  const msg = alpha.page.getByText(/Temporary password \(shown once/);
+  await expect(msg).toBeVisible();
+  const temp = (await msg.textContent())!.split(': ').pop()!.trim();
+  expect(temp).toHaveLength(20);
+  await expect(alpha.page.getByTestId('member-newbidder@alpha.test')).toContainText('Bidder');
+
+  // The new person signs in with the temporary password and is forced to choose their own.
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await page.goto('/');
+  await page.getByTestId('sign-in').click();
+  await page.locator('#username').fill('newbidder@alpha.test');
+  await page.locator('#password').fill(temp);
+  await page.locator('#kc-login').click();
+  await page.locator('#password-new').fill('Nadia-Own-Passw0rd!2026');
+  await page.locator('#password-confirm').fill('Nadia-Own-Passw0rd!2026');
+  await page.locator('input[type=submit], button[type=submit]').first().click();
+  await expect(page).toHaveURL(/\/auctions$/);
+  await expect(page.getByTestId('whoami')).toHaveText('Nadia New');
+  await expect(page.getByRole('link', { name: 'October handsets' })).toBeVisible();   // same company, same invitations
+  await page.getByRole('button', { name: 'Sign out' }).click();
+
+  // Suspended by the admin → Keycloak refuses the next sign-in.
+  const member = alpha.page.getByTestId('member-newbidder@alpha.test');
+  await member.getByRole('button', { name: 'Suspend' }).click();
+  await expect(member).toContainText('suspended');
+  await page.getByTestId('sign-in').click();
+  await page.locator('#username').fill('newbidder@alpha.test');
+  await page.locator('#password').fill('Nadia-Own-Passw0rd!2026');
+  await page.locator('#kc-login').click();
+  await expect(page.getByText(/Account is disabled/i)).toBeVisible();
+
+  await ctx.close();
+  await alpha.ctx.close();
 });
 
 test('a forged or stale session cookie gets no access', async ({ browser }) => {

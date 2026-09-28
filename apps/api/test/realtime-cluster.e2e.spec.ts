@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { KeyLike } from 'jose';
 import type { Pool } from 'pg';
+import { createClient } from 'redis';
 import { io, type Socket } from 'socket.io-client';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -47,6 +48,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   };
 
   beforeAll(async () => {
+    const r = createClient({ url: REDIS_URL });
+    await r.connect();
+    const stale = await r.keys('telus:rl:*');
+    if (stale.length) await r.del(stale);
+    await r.quit();
     admin = await resetDb(ADMIN_URL!);
     await asStaff(admin, async (c) => {
       await c.query(`
@@ -71,6 +77,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     await node2?.close();
     await admin?.end();
     delete process.env.REDIS_URL;
+  });
+
+  it('rate limits are shared: 140 requests split across two instances exceed the 120/min limit', async () => {
+    const hit = (app: INestApplication) => request(app.getHttpServer()).get('/health').then((r) => r.status);
+    const codes = await Promise.all(Array.from({ length: 140 }, (_, i) => hit(i % 2 ? node1 : node2)));
+    const limited = codes.filter((c) => c === 429).length;
+    expect(codes.filter((c) => c === 200).length).toBe(120);
+    expect(limited).toBe(20);   // with per-instance memory each node would have allowed all 70
   });
 
   it('a bid placed and published on node 1 reaches sockets connected to node 2 (customer room AND auction room)', async () => {

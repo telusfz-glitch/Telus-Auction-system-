@@ -108,3 +108,26 @@ export const UpdateSecuritySettingsSchema = z.object({
   rangeMax: Money,
 }).partial().strict().refine((v) => Object.keys(v).length > 0, { message: 'nothing to update' });
 export type UpdateSecuritySettingsInput = z.infer<typeof UpdateSecuritySettingsSchema>;
+
+// ---------------- customer team logins ----------------
+const PersonName = z.string().trim().min(1).max(100).regex(/^[^<>"\n\r]+$/, 'no special characters');
+export const CreateTeamUserSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  firstName: PersonName,
+  lastName: PersonName,
+  role: z.enum(CUSTOMER_ROLES),
+}).strict();
+export type CreateTeamUserInput = z.infer<typeof CreateTeamUserSchema>;
+
+export const UpdateTeamUserSchema = z.object({
+  role: z.enum(CUSTOMER_ROLES),
+  status: z.enum(['active', 'suspended']),
+}).partial().strict().refine((v) => Object.keys(v).length > 0, { message: 'nothing to update' });
+export type UpdateTeamUserInput = z.infer<typeof UpdateTeamUserSchema>;
+
+// ---------------- invoices ----------------
+export const SettleInvoiceSchema = z.object({
+  status: z.enum(['paid', 'void']),
+  note: z.string().trim().max(500).optional(),
+}).strict();
+export type SettleInvoiceInput = z.infer<typeof SettleInvoiceSchema>;

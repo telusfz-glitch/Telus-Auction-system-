@@ -17,11 +17,16 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           {viewer && (
             <nav>
               {viewer.kind === 'customer' ? (
-                <Link href="/auctions">My auctions</Link>
+                <>
+                  <Link href="/auctions">My auctions</Link>
+                  <Link href="/invoices">Invoices</Link>
+                  <Link href="/team">Team</Link>
+                </>
               ) : (
                 <>
                   <Link href="/admin">Auctions</Link>
                   <Link href="/admin/customers">Customers</Link>
+                  <Link href="/admin/invoices">Invoices</Link>
                   <Link href="/admin/settings">Settings</Link>
                 </>
               )}

@@ -6,6 +6,7 @@ import type { Principal } from '../src/auth/principal';
 import { BidsService } from '../src/bids/bids.service';
 import type { Env } from '../src/config/env';
 import { DbService } from '../src/db/db.service';
+import { InvoicesService } from '../src/invoices/invoices.service';
 import { LifecycleService } from '../src/lifecycle/lifecycle.service';
 import { OutboxService, type OutboxEvent } from '../src/outbox/outbox.service';
 import { asStaff, custP, resetDb, setCloseIn, staffP } from './db-helpers';
@@ -34,6 +35,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 (enabled ? describe : describe.skip)('Auction lifecycle, allocation, finalisation, outbox — real Postgres', () => {
   let admin: Pool, rawApp: Pool, db: DbService, bids: BidsService, lifecycle: LifecycleService, auctions: AuctionsService, outbox: OutboxService;
+  let invoices: InvoicesService;
   const bid = (p: Principal, lotId: string, amount: number) => bids.place(p, { lotId, amount, idempotencyKey: randomUUID() });
   const codeOf = (pr: Promise<unknown>) => pr.then(() => 'OK', (e: any) => (e.getResponse ? e.getResponse().code : `ERR:${e.code ?? e.message}`));
   const asStaffRows = async (sql: string, params: unknown[] = []) => db.withPrincipal(staffP, async (c) => (await c.query(sql, params)).rows);
@@ -47,6 +49,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     bids = new BidsService(db, audit);
     lifecycle = new LifecycleService(db);
     auctions = new AuctionsService(db, audit);
+    invoices = new InvoicesService(db, audit);
     outbox = new OutboxService(db);
     await asStaff(admin, async (c) => {
       await c.query(`
@@ -247,6 +250,29 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     expect(none.rows).toHaveLength(0);
     await expect(db.withPrincipal(aBid, (c) => c.query(`INSERT INTO invoice_lines (invoice_id, lot_id, quantity, unit_price, amount)
       SELECT id, '${LOT.UNSOLD}', 1, 1, 1 FROM invoices LIMIT 1`))).rejects.toMatchObject({ code: '42501' });
+  });
+
+  // ============ invoice settlement ============
+  it('invoices: customers list only their own; finance settles unpaid → paid once; the database refuses every other change', async () => {
+    expect((await invoices.list(aBid)).map((i: any) => [i.invoice_number, i.status, i.lines.length])).toEqual([['INV-L-ALLOC-CUST-0001', 'unpaid', 1]]);
+    expect((await invoices.list(dBid))).toEqual([]);
+    const all = await invoices.list(staffP);
+    expect(all.map((i: any) => i.invoice_number).sort()).toEqual(['INV-L-ALLOC-CUST-0001', 'INV-L-ALLOC-CUST-0002']);
+    expect((await invoices.list(staffP, 'paid'))).toEqual([]);
+    await expect(invoices.list(staffP, "x' OR 1=1")).rejects.toMatchObject({ response: { code: 'BAD_FILTER' } });
+
+    const invA = all.find((i: any) => i.invoice_number === 'INV-L-ALLOC-CUST-0001');
+    const paid = await invoices.settle(staffP, invA.id, { status: 'paid', note: 'Bank transfer ref 123' });
+    expect(paid).toMatchObject({ status: 'paid', settlement_note: 'Bank transfer ref 123' });
+    await expect(invoices.settle(staffP, invA.id, { status: 'void' })).rejects.toMatchObject({ response: { code: 'INVALID_STATE' } });
+    await expect(invoices.settle(aBid, invA.id, { status: 'paid' })).rejects.toMatchObject({ response: { code: 'INVOICE_NOT_FOUND' } });   // RLS: customers cannot update
+    expect((await asStaffRows("SELECT count(*)::int AS n FROM audit_logs WHERE action = 'invoice.paid'"))[0].n).toBe(1);
+
+    const raw = (sql: string) => db.withPrincipal(staffP, (c) => c.query(sql, [invA.id]));
+    await expect(raw('UPDATE invoices SET total_amount = 1 WHERE id = $1')).rejects.toThrow(/INVOICE_IMMUTABLE/);
+    await expect(raw("UPDATE invoices SET status = 'unpaid' WHERE id = $1")).rejects.toThrow(/INVOICE_TRANSITION_FORBIDDEN/);
+    await expect(raw("UPDATE invoices SET settlement_note = 'edited' WHERE id = $1")).rejects.toThrow(/INVOICE_IMMUTABLE/);
+    await expect(asStaff(admin, async (c) => { await c.query('DELETE FROM invoices'); })).rejects.toThrow(/append-only/);   // even the owner
   });
 
   // ============ outbox ============

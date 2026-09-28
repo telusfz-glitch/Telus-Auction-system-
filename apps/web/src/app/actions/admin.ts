@@ -10,6 +10,7 @@ import type { ZodError } from 'zod';
 import { api, asAction, type ActionResult } from '@/lib/api';
 import { requireSession } from '@/lib/auth';
 import { parseMoney } from '@/lib/format';
+import { MAX_IMPORT_BYTES, parseLotWorkbook } from '@/lib/lot-import';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const id = (v: FormDataEntryValue | null) => (typeof v === 'string' && UUID.test(v) ? v : null);
@@ -84,6 +85,28 @@ export async function lotAction(_prev: ActionResult, form: FormData): Promise<Ac
     if (op === 'withdraw') await api(s, `/admin/lots/${lotId}/withdraw`, { method: 'POST' });
     else await api(s, `/admin/lots/${lotId}`, { method: 'DELETE' });
     return op === 'withdraw' ? 'Lot withdrawn.' : 'Lot deleted.';
+  });
+  revalidatePath(`/admin/auctions/${auctionId}`);
+  return res;
+}
+
+/** Excel upload: every row is validated here and again by the API; nothing is imported unless the whole sheet is valid. */
+export async function importLotsAction(_prev: ActionResult, form: FormData): Promise<ActionResult> {
+  const s = await requireSession('staff');
+  const auctionId = id(form.get('auctionId'));
+  const file = form.get('file');
+  if (!auctionId || !(file instanceof File)) return { ok: false, message: 'Choose an .xlsx file.' };
+  if (file.size === 0) return { ok: false, message: 'The file is empty.' };
+  if (file.size > MAX_IMPORT_BYTES) return { ok: false, message: 'The file is larger than 2 MB.' };
+  const { lots, errors } = await parseLotWorkbook(await file.arrayBuffer());
+  if (errors.length) {
+    return { ok: false, message: `Nothing imported. ${errors.slice(0, 8).join(' ')}${errors.length > 8 ? ` …and ${errors.length - 8} more.` : ''}` };
+  }
+  const input = CreateLotsSchema.safeParse({ lots });
+  if (!input.success) return invalid(input.error);
+  const res = await asAction(async () => {
+    await api(s, `/admin/auctions/${auctionId}/lots`, { method: 'POST', body: input.data });
+    return `${lots.length} lot(s) imported.`;
   });
   revalidatePath(`/admin/auctions/${auctionId}`);
   return res;

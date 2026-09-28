@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { migrate } from '../../api/src/db/migrate';
-import { CUSTOMER, PASSWORD, STACK, USERS } from './stack';
+import { CREATED_IN_TEST, CUSTOMER, PASSWORD, STACK, USERS } from './stack';
 
 /** Fresh database + seed data, and real Keycloak users (created through the admin REST API, like create-user.sh). */
 export default async function globalSetup() {
@@ -45,6 +45,10 @@ export default async function globalSetup() {
     return r;
   };
 
+  for (const username of CREATED_IN_TEST) {
+    const stale = await (await call(`/users?exact=true&username=${encodeURIComponent(username)}`)).json() as Array<{ id: string }>;
+    for (const x of stale) await call(`/users/${x.id}`, { method: 'DELETE' });
+  }
   for (const u of Object.values(USERS)) {
     const existing = await (await call(`/users?exact=true&username=${encodeURIComponent(u.email)}`)).json() as Array<{ id: string }>;
     for (const x of existing) await call(`/users/${x.id}`, { method: 'DELETE' });

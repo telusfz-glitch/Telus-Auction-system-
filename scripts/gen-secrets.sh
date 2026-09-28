@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -e .env ] && { echo ".env already exists — refusing to overwrite."; exit 1; }
 r() { openssl rand -hex 24; }
-OWNER=$(r); APP=$(r); KCDB=$(r); REDIS=$(r); WEBSECRET=$(r)
+OWNER=$(r); APP=$(r); KCDB=$(r); REDIS=$(r); WEBSECRET=$(r); APIADMIN=$(r)
 cat > .env <<ENVEOF
 OWNER_DB_PASSWORD=$OWNER
 APP_DB_PASSWORD=$APP
@@ -25,6 +25,9 @@ REALTIME_TICKET_SECRET=$(r)
 # Keycloak realm import placeholders (telus-realm.json) — the web app's confidential client
 TELUS_WEB_URL=http://localhost:3000
 TELUS_WEB_CLIENT_SECRET=$WEBSECRET
+TELUS_API_ADMIN_CLIENT_SECRET=$APIADMIN
+# API: customer team logins via the Keycloak Admin API (service account telus-api-admin) — protect like the DB password
+KEYCLOAK_ADMIN_CLIENT_SECRET=$APIADMIN
 # Web app (apps/web): server-side sessions; the browser never sees a token
 WEB_URL=http://localhost:3000
 OIDC_ISSUER=http://localhost:8080/realms/telus

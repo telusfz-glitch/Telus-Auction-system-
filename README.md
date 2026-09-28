@@ -1,9 +1,10 @@
 # TELUS Auction Platform — v2
 
-Steps 1–6 of the rebuild: monorepo, infrastructure, Keycloak identity, tenant isolation, the concurrency-safe bid engine, the
+Steps 1–7 of the rebuild: monorepo, infrastructure, Keycloak identity, tenant isolation, the concurrency-safe bid engine, the
 auction lifecycle (scheduler, allocation, finalisation into invoices, outbox → realtime push), the staff admin API with
-multi-instance realtime over Redis, and the **Next.js web app** (customer bidding + staff console) on Keycloak with server-side
-sessions — plus a security test suite that runs the whole stack end to end.
+multi-instance realtime over Redis, the **Next.js web app** (customer bidding + staff console) on Keycloak with server-side
+sessions, and customer team logins, invoices, Excel lot import, shared rate limits and CI — plus a security test suite that runs
+the whole stack end to end.
 The earlier single-file demo and the first Express backend are **prototypes** — this replaces them.
 (The v1 backend had a role-check bug that would have rejected every admin; it should not be deployed.)
 
@@ -20,16 +21,22 @@ apps/api/            NestJS API (TypeScript)
   src/realtime/      Socket.IO gateway (/realtime) + routing.ts, the confidentiality rules for pushed events
   src/workers/       in-process loops that run the scheduler, the publisher and the outbox purge
   src/admin/         staff admin API: auctions, lots, invitations, customers' status/limits/margin rules, security settings
+  src/identity/      Keycloak Admin API client (service account) with customer-only guard rails
+  src/team/          customer team logins: create / change role / suspend (customer admins and staff)
+  src/invoices/      invoices: customers read their own, finance settles (unpaid → paid | void)
   db/migrations/     001_init.sql (tenancy, RLS, audit chain) · 002_bid_engine.sql (lots, margin rules, DB bid invariants)
                      003_lifecycle.sql (close-vs-bid locking, lot_results, invoice_lines, outbox claim, terms acceptance)
                      004_admin.sql (status-transition / freeze guards, withdrawn-lot bid guard, cancel notice, outbox purge)
                      005_realtime_tickets.sql (single-use socket tickets)
+                     006_team_invoices.sql (customer_users identity guard, no deletes; invoice settlement guard)
   test/              see "Honest status" for the count
 apps/web/            Next.js 15 web app (App Router, server components + server actions)
   src/lib/           OIDC (openid-client), Redis-backed encrypted sessions, server-side API client
   src/app/auth/      /auth/login · /auth/callback · /auth/logout (PKCE, state, nonce, RP-initiated logout)
   src/app/auctions/  customer: my auctions, auction page (accept terms, bid, live positions, results)
-  src/app/admin/     staff console: auctions (create, lots, invitations, schedule/cancel/finalise), customers, settings
+  src/app/admin/     staff console: auctions (create, lots, Excel import, invitations, schedule/cancel/finalise), customers
+                     (with their logins), invoices (settle), settings
+  src/app/team/      customer admin: company logins · src/app/invoices/: customer invoices
   e2e/               Playwright suite against real Keycloak + API + Postgres + Redis
 packages/shared/     Zod schemas + role names shared by API and web
 infra/keycloak/      telus realm (roles, confidential BFF client + PKCE, user profile, brute-force, password policy) + create-user.sh
@@ -175,10 +182,35 @@ response).
   `REDIS_URL`, `SESSION_SECRET`, `DISPLAY_TIMEZONE` (default Asia/Dubai). `WEB_ALLOWED_ORIGINS` when behind a proxy that rewrites Host.
   The API needs `REALTIME_TICKET_SECRET` for browser sockets.
 
+## Team logins, invoices, import, rate limits, CI (step 7)
+- **Customer team logins.** A customer admin manages their company's logins at `/team` (API `GET/POST /team`, `PATCH /team/:id`);
+  staff do the same for any customer, e.g. its first administrator (`/admin/customers/:id/users`, `PATCH /admin/customer-users/:id`).
+  The API creates the Keycloak user (username = email, `customer_id` bound, customer role, temporary password shown **once**, required
+  actions `TEAM_USER_REQUIRED_ACTIONS`, default `UPDATE_PASSWORD,CONFIGURE_TOTP`), records it in `customer_users`, and audits it.
+  Role changes and suspensions go to Keycloak too (suspension disables the user and ends their sessions); a suspended login's
+  still-valid access token is refused for bids (`LOGIN_SUSPENDED`). Nobody can change their own login, a company always keeps an
+  active administrator, rows are never deleted, and their identity columns are immutable (database trigger).
+- **The Keycloak service account** (`telus-api-admin`, client-credentials, secret `KEYCLOAK_ADMIN_CLIENT_SECRET` /
+  `TELUS_API_ADMIN_CLIENT_SECRET`) holds only user-management roles: verified here that it **cannot** change realm settings or
+  create clients. Keycloak 26.0 cannot stop it granting realm roles, so the API wraps every call: it only ever grants customer
+  roles, and before touching a user it checks the user is bound to the expected customer and holds no staff role. See gap 1.
+- **Invoices.** Customers see theirs at `/invoices` (with lines); staff at `/admin/invoices`; `super_admin`/`finance` settle an unpaid
+  invoice as paid (with a reference) or void — once. The database refuses every other change, and deletion.
+- **Excel lot import** on the staff auction page: first sheet, row-1 headers `Lot, Description, Quantity, Starting price
+  [, Fallback increment]` (common aliases accepted), ≤2 MB, ≤1000 lots, prices exact to the cent. Every bad row is reported by
+  number and nothing is imported unless the whole sheet is valid.
+- **Rate limits shared across instances** through Redis (`RATE_LIMIT_REDIS_URL`, else `REDIS_URL`), atomic in a Lua script. If
+  Redis is down the check fails **open** (logged) so a Redis outage cannot stop an auction.
+- **CI** (`.github/workflows/ci.yml`): production-dependency audit (fails on high), API typecheck and every suite against real
+  Postgres 16, Redis 7 and Keycloak 26.0.7 (the `REQUIRE_*` runs fail instead of skipping when a service is missing), web
+  typecheck, unit tests, production build and the Playwright suite.
+- **Dependencies:** NestJS 10 → 11 (clears `multer`/`body-parser` advisories), `postcss` and `uuid` overridden to patched releases.
+  `npm audit --omit=dev`: 0 vulnerabilities.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 124/124 tests pass (repeated full runs, no deadlocks logged), the database ones
-against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner; web 23 unit tests and 8 Playwright end-to-end
-tests pass against a real **Keycloak 26.0.7** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
+**Verified here:** typecheck clean (API and web); API 132/132 tests pass (repeated full runs, no deadlocks logged), the database ones
+against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
+Admin API; web 26 unit tests and 10 Playwright end-to-end tests pass against a real **Keycloak 26.0.7** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
 checked to fail when the protection they cover is removed, as was the web refresh-lock test. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
@@ -192,34 +224,37 @@ the `customer_id` attribute (undeclared attributes are discarded by the declarat
 been refused. The realm now declares it, admin-only. The web client is now confidential (the web server is the OIDC client); its
 secret and URL come from `TELUS_WEB_CLIENT_SECRET` / `TELUS_WEB_URL` at import.
 
-**Still NOT verified** (no Docker in the build environment): `docker-compose.yml` itself and `create-user.sh` (it wraps `kcadm.sh`
-through `docker compose exec`; the same admin operations were verified via the REST API).
+**Still NOT verified** (no Docker in the build environment): `docker-compose.yml` itself, `create-user.sh` (it wraps `kcadm.sh`
+through `docker compose exec`; the same admin operations were verified via the REST API) and the CI workflow's Docker steps
+(`scripts/ci/prepare-services.sh`) until it runs on GitHub.
 
 ## Known gaps — do not skip these before production
-1. **MFA is not enforced by the API.** It relies on Keycloak: `create-user.sh` sets `CONFIGURE_TOTP` as a required action, so users
-   created that way enrol TOTP at first login. Users created any other way get no MFA unless you configure a required action /
-   conditional-OTP flow for staff roles in Keycloak. The API does not check `acr`/`amr`.
-2. `sslRequired: external` and `start-dev` are **dev settings**. Production: `sslRequired: all`, `kc start` behind TLS with a real
+1. **The Keycloak service account can grant any realm role** (verified: `manage-users` in Keycloak 26.0 lets it map `super_admin`).
+   The API never does this (guard rails above, tested), but whoever holds `KEYCLOAK_ADMIN_CLIENT_SECRET` could. Protect it like the
+   database password (someone who compromises the API can already act as staff through the database). To close it: upgrade to
+   Keycloak ≥ 26.2 and use fine-grained admin permissions v2 to limit the account to customer roles / a customers group, or move
+   customers to their own realm.
+2. **MFA is not enforced by the API.** It relies on Keycloak: `create-user.sh` and the team endpoints set `CONFIGURE_TOTP` as a required
+   action, so users created that way enrol TOTP at first login. Users created any other way get no MFA unless you configure a
+   conditional-OTP flow in Keycloak. The API does not check `acr`/`amr`.
+3. `sslRequired: external` and `start-dev` are **dev settings**. Production: `sslRequired: all`, `kc start` behind TLS with a real
    hostname, `https` issuer (the API already refuses a non-https issuer when `NODE_ENV=production`).
-3. Migrations here run as a superuser (`telus_owner` in the dev image). Production should use a separate non-superuser owner role.
-4. Audit chain stops tampering by application code and by the owner *unless they drop the triggers*. Stream `audit_logs` to
+4. Migrations here run as a superuser (`telus_owner` in the dev image). Production should use a separate non-superuser owner role.
+5. Audit chain stops tampering by application code and by the owner *unless they drop the triggers*. Stream `audit_logs` to
    write-once storage (S3 Object Lock) to close that.
-5. **API rate limits are per instance** (in-memory throttler). With several instances behind a load balancer the effective limit
-   multiplies; move the throttler storage to Redis before scaling out. Socket connections are not rate-limited beyond the handshake.
-6. Suspending or blocking a *customer* stops their bids immediately (engine check), but their already-open sockets keep receiving
-   public room events until their token expires (≤5 min). Revoking an *invitation* evicts them at once (see step 5).
-7. The exposure check stops counting an auction's lots once it is `finalized` (existing step-3 rule). If purchase limits should include
+6. A suspended login or a suspended *customer* cannot bid from that moment, but already-open pages and sockets keep receiving public
+   auction events until the access token expires (≤5 min); there is no back-channel logout to the web app yet. Revoking an
+   *invitation* evicts the customer's sockets at once.
+7. The exposure check stops counting an auction's lots once it is `finalized` (step-3 rule). If purchase limits should include
    unpaid invoices, count them explicitly.
 8. Changing a margin rule set takes effect on the next bid, including in live auctions. If brackets must be frozen per auction,
    snapshot them at scheduling time.
-9. No out-of-band notifications (email/SMS) for outbid/won/cancelled; no Excel/CSV import for lots (the bulk JSON endpoint takes up to
-   1000 lots per call, so an importer only needs to parse the file and call it).
-10. Web app: sessions end when the refresh token expires or refresh fails, but a user disabled in Keycloak keeps their current access
-    token until it expires (≤5 min) — no back-channel logout yet. The web app has no rate limiting of its own (the API's applies).
-    Customer team logins are still created in Keycloak by staff (`create-user.sh`); there is no self-service team management UI.
-11. Not built yet: child-login provisioning via the Keycloak Admin API, Excel lot import, invoices/payments UI, credential vault for
-    external-platform passwords, payments port, dependency/secret scanning in CI, third-party penetration test.
+9. Temporary passwords for new logins are shown once to the person who created them, who must pass them on; there is no email
+   delivery (Keycloak's execute-actions email needs SMTP configured). No out-of-band notifications (email/SMS) for outbid/won either.
+10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
+11. Not built yet: notifications, credential vault for external-platform passwords, payments port, audit shipping, secret scanning in
+    CI, third-party penetration test, load test.
 
 ## Next
-7. Customer team management (child logins via the Keycloak Admin API) · Excel lot import · invoices view · Redis-backed rate limits ·
-8. Notifications (email/SMS), vault, payments, audit shipping, CI (typecheck + unit + DB + e2e) and security scanning, penetration test.
+8. Keycloak ≥ 26.2 with fine-grained admin permissions (closes gap 1) · email delivery (SMTP) for new logins, outbid and won notices ·
+   back-channel logout · load test · 9. Vault, payments, audit shipping to write-once storage, secret scanning, penetration test.

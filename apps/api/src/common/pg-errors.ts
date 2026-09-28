@@ -12,7 +12,7 @@ export function mapPgError(err: unknown): unknown {
     case '23P01': return new ApiError('OVERLAP', 'The ranges overlap.', 422);
     case '23514': return new ApiError('CONSTRAINT_VIOLATION', 'The values are not allowed.', 422);
     case '42501':
-      if (/^(AUCTION_TRANSITION_FORBIDDEN|AUCTION_FROZEN|LOT_FROZEN)/.test(e.message ?? '')) {
+      if (/^(AUCTION_TRANSITION_FORBIDDEN|AUCTION_FROZEN|LOT_FROZEN|INVOICE_TRANSITION_FORBIDDEN|INVOICE_IMMUTABLE|CUSTOMER_USER_IDENTITY_IMMUTABLE)/.test(e.message ?? '')) {
         return new ApiError('INVALID_STATE', 'That change is not allowed in the auction\'s current state.', 409);
       }
       return err;

@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { addLotAction, auctionTransitionAction, inviteAction, lotAction, revokeAction } from '@/app/actions/admin';
+import { addLotAction, auctionTransitionAction, importLotsAction, inviteAction, lotAction, revokeAction } from '@/app/actions/admin';
 import { ActionForm } from '@/components/ActionForm';
 import { Countdown } from '@/components/Countdown';
 import { LiveUpdates } from '@/components/LiveUpdates';
@@ -115,6 +115,12 @@ export default async function AdminAuctionPage({ params }: { params: Promise<{ i
             <label>Qty <input name="quantity" type="number" min={1} required style={{ width: 80 }} /></label>
             <label>Starting price (AED) <input name="startingPrice" inputMode="decimal" required className="amount" /></label>
             <label>Fallback increment <input name="fallbackIncrement" inputMode="decimal" placeholder="25" className="amount" /></label>
+          </ActionForm>
+          <ActionForm action={importLotsAction} submit="Import from Excel" variant="secondary" hidden={{ auctionId: a.id }}>
+            <label>Excel file (.xlsx)
+              <input name="file" type="file" required accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            </label>
+            <small className="muted">First sheet, row 1 headers: Lot · Description · Quantity · Starting price · (Fallback increment)</small>
           </ActionForm>
         </div>
       )}
