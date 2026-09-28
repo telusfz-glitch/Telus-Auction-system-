@@ -13,6 +13,9 @@ const ADMIN_URL = process.env.TEST_DB_ADMIN_URL;
 const APP_URL = process.env.TEST_DB_APP_URL;
 const ISSUER = process.env.TEST_KEYCLOAK_ISSUER;            // e.g. http://localhost:8080/realms/telus
 const SECRET = process.env.TEST_KEYCLOAK_ADMIN_SECRET;      // the telus-api-admin client secret
+// Master-realm administrator, used only to plant fixtures the service account is (correctly) not allowed to create.
+const MASTER_USER = process.env.TEST_KEYCLOAK_MASTER_USER ?? 'kcadmin';
+const MASTER_PASSWORD = process.env.TEST_KEYCLOAK_MASTER_PASSWORD ?? 'kcadminpw';
 const enabled = !!ADMIN_URL && !!APP_URL && !!ISSUER && !!SECRET;
 if (!enabled && process.env.REQUIRE_KEYCLOAK_TESTS) {
   it('Keycloak tests are REQUIRED but TEST_KEYCLOAK_ISSUER / TEST_KEYCLOAK_ADMIN_SECRET / DB env are not set', () => { throw new Error('env missing'); });
@@ -34,6 +37,13 @@ const email = (who: string) => `${who}-${run}@team.test`;
     method: 'POST', body: new URLSearchParams({ grant_type: 'client_credentials', client_id: 'telus-api-admin', client_secret: SECRET! }),
   })).json()).access_token as string;
   const kcGet = async (path: string) => (await fetch(`${kcAdminUrl}${path}`, { headers: { authorization: `Bearer ${await svcToken()}` } })).json();
+  const masterToken = async () => (await (await fetch(`${ISSUER!.replace(/\/realms\/[^/]+$/, '')}/realms/master/protocol/openid-connect/token`, {
+    method: 'POST', body: new URLSearchParams({ grant_type: 'password', client_id: 'admin-cli', username: MASTER_USER, password: MASTER_PASSWORD }),
+  })).json()).access_token as string;
+  /** Raw Admin API call AS THE SERVICE ACCOUNT (bypassing the API's own guard rails) — returns the HTTP status. */
+  const svcRaw = async (method: string, path: string, body?: unknown) => (await fetch(`${kcAdminUrl}${path}`, {
+    method, headers: { authorization: `Bearer ${await svcToken()}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+  })).status;
   const created: string[] = [];
   let firstAdmin: Principal, firstAdminRow: any, bidderRow: any;
 
@@ -53,7 +63,7 @@ const email = (who: string) => `${who}-${run}@team.test`;
     });
   });
   afterAll(async () => {
-    const t = await svcToken();
+    const t = await masterToken();
     for (const sub of created) await fetch(`${kcAdminUrl}/users/${sub}`, { method: 'DELETE', headers: { authorization: `Bearer ${t}` } });
     await db?.onModuleDestroy();
     await admin?.end();
@@ -121,9 +131,34 @@ const email = (who: string) => `${who}-${run}@team.test`;
     await expect(db.withPrincipal(firstAdmin, (c) => c.query('DELETE FROM customer_users'))).rejects.toMatchObject({ code: '42501' });
   });
 
+  it('Keycloak itself confines the service account: no staff access, no staff roles, no users outside the customers group', async () => {
+    const t = await masterToken();
+    const res = await fetch(`${kcAdminUrl}/users`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ username: email('boss-staff'), email: email('boss-staff'), firstName: 'B', lastName: 'S', enabled: true }) });
+    const staffSub = res.headers.get('location')!.split('/').pop()!;
+    created.push(staffSub);
+    const role = async (name: string) => (await fetch(`${kcAdminUrl}/roles/${name}`, { headers: { authorization: `Bearer ${t}` } })).json();
+    await fetch(`${kcAdminUrl}/users/${staffSub}/role-mappings/realm`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify([await role('super_admin')]) });
+
+    // Everything below is attempted with the raw service-account token — as an attacker holding its secret would.
+    expect(await svcRaw('GET', `/users/${staffSub}`)).toBe(403);
+    expect(await svcRaw('PUT', `/users/${staffSub}`, { enabled: false })).toBe(403);
+    expect(await svcRaw('PUT', `/users/${staffSub}/reset-password`, { type: 'password', value: 'Pwned-Passw0rd!2026', temporary: false })).toBe(403);
+    expect(await svcRaw('DELETE', `/users/${staffSub}/role-mappings/realm`, [await role('super_admin')])).toBe(403);
+    expect(await svcRaw('PUT', `/users/${staffSub}/groups/c0570000-0000-4000-8000-000000000001`, undefined)).toBe(403);
+    expect(await svcRaw('POST', `/users/${firstAdminRow.keycloak_sub}/role-mappings/realm`, [await role('super_admin')])).toBe(403);
+    expect(await svcRaw('POST', `/users/${firstAdminRow.keycloak_sub}/role-mappings/realm`, [await role('finance')])).toBe(403);
+    expect(await svcRaw('POST', '/users', { username: email('outside'), email: email('outside'), firstName: 'O', lastName: 'X', enabled: true })).toBe(403);
+    expect(await svcRaw('PUT', '', { bruteForceProtected: false })).toBe(403);
+    expect(await svcRaw('POST', '/clients', { clientId: `evil-${run}` })).toBe(403);
+    const visible = (await kcGet('/users?max=200')).map((u: any) => u.username);
+    expect(visible).not.toContain(email('boss-staff'));                          // staff are invisible to it
+    expect(visible).toContain(email('boss'));
+  });
+
   it('the service-account wrapper refuses to touch a staff account or another customer\'s user, and never grants staff roles', async () => {
-    // A Keycloak user claiming customer A but holding super_admin (e.g. planted by someone with Keycloak access).
-    const t = await svcToken();
+    // A Keycloak user claiming customer A but holding super_admin (planted by a Keycloak administrator).
+    const t = await masterToken();
     const res = await fetch(`${kcAdminUrl}/users`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' },
       body: JSON.stringify({ username: email('staffy'), email: email('staffy'), firstName: 'S', lastName: 'T', enabled: true, attributes: { customer_id: [CU.A] } }) });
     const staffSub = res.headers.get('location')!.split('/').pop()!;
@@ -132,7 +167,8 @@ const email = (who: string) => `${who}-${run}@team.test`;
     await fetch(`${kcAdminUrl}/users/${staffSub}/role-mappings/realm`, { method: 'POST', headers: { authorization: `Bearer ${t}`, 'content-type': 'application/json' }, body: JSON.stringify([role]) });
 
     await expect(kc.setEnabled(staffSub, CU.A, false)).rejects.toMatchObject({ response: { code: 'USER_NOT_FOUND' } });
-    expect((await kcGet(`/users/${staffSub}`)).enabled).toBe(true);                                       // untouched
+    const seen = await (await fetch(`${kcAdminUrl}/users/${staffSub}`, { headers: { authorization: `Bearer ${await masterToken()}` } })).json();
+    expect(seen.enabled).toBe(true);                                                                      // untouched
     await expect(kc.setEnabled(bidderRow.keycloak_sub, CU.B, false)).rejects.toMatchObject({ response: { code: 'USER_NOT_FOUND' } });
     await expect(kc.setCustomerRole(bidderRow.keycloak_sub, CU.A, 'super_admin')).rejects.toThrow(/refusing to grant non-customer role/);
     await expect(kc.createCustomerUser({ email: email('x'), firstName: 'X', lastName: 'Y', customerId: CU.A, role: 'finance' }))

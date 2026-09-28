@@ -37,8 +37,8 @@ export default defineConfig({
         KEYCLOAK_ISSUER: `${STACK.keycloakUrl}/realms/telus`, API_AUDIENCE: 'telus-api', CORS_ORIGINS: STACK.webUrl,
         REALTIME_TICKET_SECRET: 'e2e-ticket-secret-0123456789abcdef-0123456789', SCHEDULER_INTERVAL_MS: '500',
         KEYCLOAK_ADMIN_CLIENT_SECRET: STACK.apiAdminSecret,
-        // New team logins must change the temporary password (TOTP enrolment is the production default but needs an authenticator).
-        TEAM_USER_REQUIRED_ACTIONS: 'UPDATE_PASSWORD',
+        // Production default: new team logins must choose a password AND enrol an authenticator (the test computes TOTP codes).
+        TEAM_USER_REQUIRED_ACTIONS: 'UPDATE_PASSWORD,CONFIGURE_TOTP',
       },
     },
     {

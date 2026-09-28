@@ -191,9 +191,12 @@ response).
   still-valid access token is refused for bids (`LOGIN_SUSPENDED`). Nobody can change their own login, a company always keeps an
   active administrator, rows are never deleted, and their identity columns are immutable (database trigger).
 - **The Keycloak service account** (`telus-api-admin`, client-credentials, secret `KEYCLOAK_ADMIN_CLIENT_SECRET` /
-  `TELUS_API_ADMIN_CLIENT_SECRET`) holds only user-management roles: verified here that it **cannot** change realm settings or
-  create clients. Keycloak 26.0 cannot stop it granting realm roles, so the API wraps every call: it only ever grants customer
-  roles, and before touching a user it checks the user is bound to the expected customer and holds no staff role. See gap 1.
+  `TELUS_API_ADMIN_CLIENT_SECRET`) is confined **by Keycloak itself** (Keycloak ≥ 26.2, fine-grained admin permissions v2, all in
+  `telus-realm.json`): realm roles `query-users`, `query-groups`, `view-realm` only, plus three permissions — manage members of the
+  `customers` group, map the three customer roles, map roles on users. It can create users only inside `customers`, cannot see,
+  change, reset or re-role any staff account, cannot grant any staff role, cannot change realm settings or create clients
+  (each proven with the raw service-account token in `team.kc.spec`). The API adds its own checks on top: customer roles only,
+  target bound to the expected customer, no staff role.
 - **Invoices.** Customers see theirs at `/invoices` (with lines); staff at `/admin/invoices`; `super_admin`/`finance` settle an unpaid
   invoice as paid (with a reference) or void — once. The database refuses every other change, and deletion.
 - **Excel lot import** on the staff auction page: first sheet, row-1 headers `Lot, Description, Quantity, Starting price
@@ -208,9 +211,9 @@ response).
   `npm audit --omit=dev`: 0 vulnerabilities.
 
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 132/132 tests pass (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 133/133 tests pass (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
-Admin API; web 26 unit tests and 10 Playwright end-to-end tests pass against a real **Keycloak 26.0.7** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
+Admin API; web 26 unit tests and 10 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
 checked to fail when the protection they cover is removed, as was the web refresh-lock test. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
@@ -222,18 +225,21 @@ few hundred bids/second per lot. Load-test before an event, and collapse the rea
 e2e suite logs in real users and the API accepts their tokens). Loading the realm found a real bug: Keycloak 24+ **silently dropped**
 the `customer_id` attribute (undeclared attributes are discarded by the declarative user profile), so every customer login would have
 been refused. The realm now declares it, admin-only. The web client is now confidential (the web server is the OIDC client); its
-secret and URL come from `TELUS_WEB_CLIENT_SECRET` / `TELUS_WEB_URL` at import.
+secret and URL come from `TELUS_WEB_CLIENT_SECRET` / `TELUS_WEB_URL` at import. A second realm bug surfaced on 26.6: the OTP policy
+had no algorithm (a null that crashed realm export); it is now complete, and the e2e suite enrols a real authenticator (it computes
+TOTP codes from the secret Keycloak shows) for a newly created team login.
 
 **Still NOT verified** (no Docker in the build environment): `docker-compose.yml` itself, `create-user.sh` (it wraps `kcadm.sh`
 through `docker compose exec`; the same admin operations were verified via the REST API) and the CI workflow's Docker steps
 (`scripts/ci/prepare-services.sh`) until it runs on GitHub.
 
 ## Known gaps — do not skip these before production
-1. **The Keycloak service account can grant any realm role** (verified: `manage-users` in Keycloak 26.0 lets it map `super_admin`).
-   The API never does this (guard rails above, tested), but whoever holds `KEYCLOAK_ADMIN_CLIENT_SECRET` could. Protect it like the
-   database password (someone who compromises the API can already act as staff through the database). To close it: upgrade to
-   Keycloak ≥ 26.2 and use fine-grained admin permissions v2 to limit the account to customer roles / a customers group, or move
-   customers to their own realm.
+1. **Residual service-account power (small).** Keycloak 26.6 has no group-scoped "map roles on users", so the account holds
+   `map-roles` on all users. Combined with its role permission it can only ever attach or remove the three *customer* roles; on a
+   staff account that is not an escalation (a token with staff and customer roles is refused), but it would lock that staff member
+   out until an administrator removes the role. Protect `KEYCLOAK_ADMIN_CLIENT_SECRET` like the database password, and alert on
+   admin events that map customer roles to users outside `customers`. (With Keycloak 26.0 the same account could grant
+   `super_admin`; that is why the realm now requires ≥ 26.2 — see `docker-compose.yml`.)
 2. **MFA is not enforced by the API.** It relies on Keycloak: `create-user.sh` and the team endpoints set `CONFIGURE_TOTP` as a required
    action, so users created that way enrol TOTP at first login. Users created any other way get no MFA unless you configure a
    conditional-OTP flow in Keycloak. The API does not check `acr`/`amr`.
@@ -256,5 +262,5 @@ through `docker compose exec`; the same admin operations were verified via the R
     CI, third-party penetration test, load test.
 
 ## Next
-8. Keycloak ≥ 26.2 with fine-grained admin permissions (closes gap 1) · email delivery (SMTP) for new logins, outbid and won notices ·
+8. Email delivery (SMTP) for new logins, outbid and won notices ·
    back-channel logout · load test · 9. Vault, payments, audit shipping to write-once storage, secret scanning, penetration test.

@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 import { createClient } from 'redis';
 import { keyOf, seal, unseal } from '../src/lib/crypto';
 import { PASSWORD, STACK, USERS } from './stack';
+import { totp } from './totp';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -225,7 +226,7 @@ test('invoices: the winner sees theirs; only finance can settle it', async ({ br
   for (const u of [alpha, mgr, fin]) await u.ctx.close();
 });
 
-test('team: a customer admin creates a login; the new person must set a password; suspension blocks sign-in', async ({ browser }) => {
+test('team: a customer admin creates a login; the new person must set a password and enrol an authenticator; suspension blocks sign-in', async ({ browser }) => {
   const alpha = await newUser(browser, 'alphaAdmin');
   await alpha.page.getByRole('link', { name: 'Team' }).click();
   await alpha.page.getByLabel('Email').fill('newbidder@alpha.test');
@@ -247,9 +248,24 @@ test('team: a customer admin creates a login; the new person must set a password
   await page.locator('#username').fill('newbidder@alpha.test');
   await page.locator('#password').fill(temp);
   await page.locator('#kc-login').click();
-  await page.locator('#password-new').fill('Nadia-Own-Passw0rd!2026');
-  await page.locator('#password-confirm').fill('Nadia-Own-Passw0rd!2026');
-  await page.locator('input[type=submit], button[type=submit]').first().click();
+  // First sign-in: Keycloak requires a new password AND authenticator enrolment (in whichever order it chooses).
+  let enrolledSecret = '';
+  for (let step = 0; step < 4 && !page.url().startsWith(STACK.webUrl); step++) {
+    await page.waitForLoadState();
+    if (await page.locator('#password-new').isVisible()) {
+      await page.locator('#password-new').fill('Nadia-Own-Passw0rd!2026');
+      await page.locator('#password-confirm').fill('Nadia-Own-Passw0rd!2026');
+      await page.locator('input[type=submit], button[type=submit]').first().click();
+    } else if (await page.locator('#totp').isVisible()) {
+      if (!(await page.locator('#kc-totp-secret-key').isVisible())) await page.getByText(/Unable to scan/i).click();
+      enrolledSecret = (await page.locator('#kc-totp-secret-key').textContent())!.trim();
+      await page.locator('#totp').fill(totp(enrolledSecret));
+      await page.locator('#userLabel').fill('Nadia phone');
+      await page.locator('input[type=submit], button[type=submit]').first().click();
+    }
+    await page.waitForURL((u) => u.href !== page.url() || u.origin === new URL(STACK.webUrl).origin, { timeout: 10_000 }).catch(() => undefined);
+  }
+  expect(enrolledSecret).toMatch(/^[A-Z2-7 ]{16,}$/);   // the authenticator really was enrolled
   await expect(page).toHaveURL(/\/auctions$/);
   await expect(page.getByTestId('whoami')).toHaveText('Nadia New');
   await expect(page.getByRole('link', { name: 'October handsets' })).toBeVisible();   // same company, same invitations

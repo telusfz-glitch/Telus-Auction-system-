@@ -27,7 +27,7 @@ services:
     volumes: [redisdata:/data]
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0.7   # the version the realm file is tested against
+    image: quay.io/keycloak/keycloak:26.6.4   # the version the realm file is tested against (fine-grained admin permissions v2)
     command: ["start-dev", "--import-realm"]
     environment:
       KC_DB: postgres

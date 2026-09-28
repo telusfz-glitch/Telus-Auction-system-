@@ -9,9 +9,10 @@ export interface KcUser { id: string; username: string; email?: string; enabled:
 
 /**
  * Minimal Keycloak Admin REST client for customer logins, authenticated as the `telus-api-admin` service account
- * (client credentials). That account holds user-management roles only, and this class adds the rules Keycloak 26.0
- * cannot express: it only ever grants CUSTOMER roles, and refuses to touch a user that is not bound to the expected
- * customer or that holds any staff role (see README "Known gaps" for the residual risk).
+ * (client credentials). Keycloak itself confines that account (fine-grained admin permissions v2, telus-realm.json):
+ * it can create and manage only members of the `customers` group and grant only the three customer roles.
+ * This class adds defence in depth on top: it only ever grants CUSTOMER roles, and refuses to touch a user that is not
+ * bound to the expected customer or that holds any staff role.
  */
 @Injectable()
 export class KeycloakAdmin {
@@ -47,14 +48,14 @@ export class KeycloakAdmin {
     return body.access_token;
   }
 
-  private async call(method: string, path: string, body?: unknown): Promise<Response> {
+  private async call(method: string, path: string, body?: unknown, allowForbidden = false): Promise<Response> {
     const res = await fetch(`${this.adminUrl}${path}`, {
       method,
       headers: { authorization: `Bearer ${await this.accessToken()}`, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000),
     });
-    if (res.status >= 500 || res.status === 401 || res.status === 403) {
+    if (res.status >= 500 || res.status === 401 || (res.status === 403 && !allowForbidden)) {
       this.logger.error(`keycloak admin ${method} ${path.replace(/[0-9a-f-]{36}/g, ':id')} → ${res.status}`);
       throw new ApiError('IDENTITY_UNAVAILABLE', 'The identity service is unavailable. Please try again.', 503);
     }
@@ -68,6 +69,8 @@ export class KeycloakAdmin {
     const res = await this.call('POST', '/users', {
       username: u.email, email: u.email, firstName: u.firstName, lastName: u.lastName, enabled: true, emailVerified: true,
       attributes: { customer_id: [u.customerId] },
+      // The service account may create users ONLY inside this group (fine-grained admin permissions, telus-realm.json).
+      groups: ['/customers'],
       requiredActions: this.env.TEAM_USER_REQUIRED_ACTIONS.split(',').map((s) => s.trim()).filter(Boolean),
       credentials: [{ type: 'password', value: temporaryPassword, temporary: true }],
     });
@@ -89,7 +92,12 @@ export class KeycloakAdmin {
 
   /** Loads a user and proves it belongs to `customerId` and holds no staff role — before ANY change to it. */
   async getCustomerUser(id: string, customerId: string): Promise<KcUser> {
-    const res = await this.call('GET', `/users/${id}`);
+    const res = await this.call('GET', `/users/${id}`, undefined, true);
+    if (res.status === 403) {
+      // Keycloak itself refuses: the user is not a member of the customers group (e.g. a staff account).
+      this.logger.error(`refusing to manage user ${id}: outside the service account's permissions`);
+      throw new ApiError('USER_NOT_FOUND', 'User not found.', 404);
+    }
     if (res.status === 404) throw new ApiError('USER_NOT_FOUND', 'User not found.', 404);
     const user = (await res.json()) as KcUser;
     if (user.attributes?.['customer_id']?.[0]?.toLowerCase() !== customerId.toLowerCase()) {

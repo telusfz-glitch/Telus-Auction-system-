@@ -20,7 +20,7 @@ if [ "${WITH_KEYCLOAK:-1}" = "1" ]; then
     -e TELUS_WEB_CLIENT_SECRET=e2e-web-client-secret-0123456789 \
     -e TELUS_API_ADMIN_CLIENT_SECRET=e2e-api-admin-secret-0123456789 \
     -v "$PWD/infra/keycloak/telus-realm.json:/opt/keycloak/data/import/telus-realm.json:ro" \
-    quay.io/keycloak/keycloak:26.0.7 start-dev --import-realm
+    quay.io/keycloak/keycloak:26.6.4 start-dev --import-realm
   for i in $(seq 1 90); do
     curl -sf http://localhost:8080/realms/telus/.well-known/openid-configuration >/dev/null && { echo "Keycloak ready after $((i * 2))s"; exit 0; }
     sleep 2
