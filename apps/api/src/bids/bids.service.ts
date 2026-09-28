@@ -145,6 +145,49 @@ export class BidsService {
     });
   }
 
+  /**
+   * The caller's position on every lot of an auction in one call (for the web app's lot table). The minimum next
+   * bid is included only when it reveals nothing new: in 'full_price' auctions, or on lots the caller leads
+   * (where the price is their own bid). It uses the caller's OWN margin bracket, exactly as the engine will.
+   */
+  async myPositions(p: Principal, auctionId: string) {
+    return this.db.withPrincipal(p, async (c) => {
+      const auction = (await c.query('SELECT id, status, bid_visibility FROM auctions WHERE id = $1', [auctionId])).rows[0];
+      if (!auction) throw new BidRejected('AUCTION_NOT_FOUND', 'Auction not found.', 404);
+      const lots = (await c.query(
+        `SELECT l.id AS lot_id, l.status, l.starting_price::text AS starting_price, l.fallback_increment::text AS fallback,
+                mb.amount AS my_highest_bid, coalesce(ps.leader_is_me, false) AS leader_is_me,
+                visible_highest_bid(l.id)::text AS current_highest_bid
+           FROM auction_lots l
+           LEFT JOIN LATERAL (SELECT max(b.amount)::text AS amount FROM bids b WHERE b.lot_id = l.id AND b.customer_id = $2) mb ON true
+           LEFT JOIN LATERAL lot_price_state(l.id) ps ON true
+          WHERE l.auction_id = $1 ORDER BY l.lot_number`, [auctionId, p.customerId])).rows;
+      const brackets = (await c.query(
+        `SELECT b.price_from::text AS f, b.price_to::text AS t, b.margin::text AS m FROM margin_rule_brackets b
+           JOIN customers cu ON cu.margin_rule_set_id = b.rule_set_id WHERE cu.id = $1`, [p.customerId])).rows
+        .map((b) => ({ from: toCents(b.f), to: toCents(b.t), margin: toCents(b.m) }));
+      const fullPrice = auction.bid_visibility === 'full_price';
+
+      return lots.map((l) => {
+        const status = !l.my_highest_bid ? 'no_bid' : l.leader_is_me ? 'leading' : 'outbid';
+        const knownPrice: string | null = fullPrice ? l.current_highest_bid : status === 'leading' ? l.my_highest_bid : null;
+        let minNextBid: string | null = null;
+        if (l.status === 'active' && (fullPrice || status === 'leading')) {
+          if (knownPrice === null) minNextBid = l.starting_price;
+          else {
+            const price = toCents(knownPrice);
+            const br = brackets.find((b) => price >= b.from && price < b.to);
+            minNextBid = fromCents(price + (br ? br.margin : toCents(l.fallback)));
+          }
+        }
+        return {
+          lotId: l.lot_id, lotStatus: l.status, status, myHighestBid: l.my_highest_bid ?? null,
+          currentHighestBid: l.current_highest_bid ?? null, minNextBid,
+        };
+      });
+    });
+  }
+
   private async closeAt(c: PoolClient, auctionId: string): Promise<string> {
     const r = await c.query('SELECT close_at FROM auctions WHERE id = $1', [auctionId]);
     return new Date(r.rows[0].close_at).toISOString();

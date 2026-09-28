@@ -1,8 +1,9 @@
-# TELUS Auction Platform — v2 (secure foundation + bid engine + auction lifecycle + staff admin)
+# TELUS Auction Platform — v2
 
-Steps 1–5 of the rebuild: monorepo, infrastructure, Keycloak identity, tenant isolation, the concurrency-safe bid engine, the
-auction lifecycle (scheduler, allocation, finalisation into invoices, outbox → realtime push), and the staff admin API (auctions,
-lots, invitations, margin rules, limits, security settings) with multi-instance realtime over Redis, plus a security test suite.
+Steps 1–6 of the rebuild: monorepo, infrastructure, Keycloak identity, tenant isolation, the concurrency-safe bid engine, the
+auction lifecycle (scheduler, allocation, finalisation into invoices, outbox → realtime push), the staff admin API with
+multi-instance realtime over Redis, and the **Next.js web app** (customer bidding + staff console) on Keycloak with server-side
+sessions — plus a security test suite that runs the whole stack end to end.
 The earlier single-file demo and the first Express backend are **prototypes** — this replaces them.
 (The v1 backend had a role-check bug that would have rejected every admin; it should not be deployed.)
 
@@ -22,9 +23,16 @@ apps/api/            NestJS API (TypeScript)
   db/migrations/     001_init.sql (tenancy, RLS, audit chain) · 002_bid_engine.sql (lots, margin rules, DB bid invariants)
                      003_lifecycle.sql (close-vs-bid locking, lot_results, invoice_lines, outbox claim, terms acceptance)
                      004_admin.sql (status-transition / freeze guards, withdrawn-lot bid guard, cancel notice, outbox purge)
+                     005_realtime_tickets.sql (single-use socket tickets)
   test/              see "Honest status" for the count
-packages/shared/     Zod schemas + role names shared by API and (later) web
-infra/keycloak/      telus realm (roles, PKCE client, brute-force, password policy) + create-user.sh
+apps/web/            Next.js 15 web app (App Router, server components + server actions)
+  src/lib/           OIDC (openid-client), Redis-backed encrypted sessions, server-side API client
+  src/app/auth/      /auth/login · /auth/callback · /auth/logout (PKCE, state, nonce, RP-initiated logout)
+  src/app/auctions/  customer: my auctions, auction page (accept terms, bid, live positions, results)
+  src/app/admin/     staff console: auctions (create, lots, invitations, schedule/cancel/finalise), customers, settings
+  e2e/               Playwright suite against real Keycloak + API + Postgres + Redis
+packages/shared/     Zod schemas + role names shared by API and web
+infra/keycloak/      telus realm (roles, confidential BFF client + PKCE, user profile, brute-force, password policy) + create-user.sh
 infra/postgres/init/ creates the restricted `telus_app` runtime role
 docker-compose.yml   Postgres 16, Redis 7, Keycloak 26 (127.0.0.1 only, no default secrets)
 ```
@@ -36,14 +44,22 @@ docker compose up -d
 npm install
 set -a; . ./.env; set +a
 npm run migrate -w @telus/api          # as the OWNER role
-npm run start   -w @telus/api          # as the restricted telus_app role
+npm run start   -w @telus/api          # as the restricted telus_app role (port 4000)
+npm run build:web && npm run start -w @telus/web   # web app on http://localhost:3000 (same shell: it reads the .env values)
 TEMP_PASSWORD='<one-time>' infra/keycloak/create-user.sh admin@telus.ae super_admin
 ```
+For development, `npm run dev:web` instead of build+start.
 Tests: `npm test` (DB-free) · `TEST_DB_ADMIN_URL=… TEST_DB_APP_URL=… npm run test:db` (needs Postgres; the OWNER role must be non-superuser, like production; the suite drops the
 `public` schema and **refuses to run unless the database name contains "test"**). The owner must be able to `CREATE EXTENSION`
 (pgcrypto and btree_gist are trusted extensions, so owning the database is enough on PG 13+).
 `TEST_DB_ADMIN_URL=… TEST_DB_APP_URL=… TEST_REDIS_URL=redis://… npm run test:redis -w @telus/api` runs two API instances against one
-Redis to prove cross-instance realtime delivery.
+Redis to prove cross-instance realtime delivery. `npm test -w @telus/web` runs the web unit tests (no services needed).
+
+**End-to-end tests** (`npm run e2e`): Playwright drives Chromium against real Keycloak, Postgres and Redis; it starts the API and the
+production build of the web app itself, resets a `*_test` database, and creates its Keycloak users through the admin REST API.
+Defaults (overridable with `E2E_*` variables, see `apps/web/e2e/stack.ts`): Keycloak on :8080 with admin `kcadmin`, the realm imported
+with `TELUS_WEB_URL=http://localhost:3000` and `TELUS_WEB_CLIENT_SECRET=e2e-web-client-secret-0123456789`; Postgres on :5433 with
+database `telus_e2e_test`; Redis on :6380 with password `testpw`. These are test-only values.
 
 ## Security model (what is enforced, and where)
 | Threat | Control | Proven by |
@@ -69,6 +85,13 @@ Redis to prove cross-instance realtime delivery.
 | Bids on a withdrawn lot | per-lot lock shared by withdraw, engine and a bid trigger that re-checks `active` | `admin.spec` (API and raw SQL) |
 | Over-broad staff powers | per-endpoint roles: managers run auctions, finance sets limits, only super_admin changes security settings | `admin.spec` (403 matrix) |
 | Revoked customer still listening | revoke evicts their sockets from the auction room on every instance; re-subscribe is RLS-checked | `realtime-cluster.e2e.spec` |
+| Token theft from the browser (XSS) | web app is a backend-for-frontend: tokens live in Redis (AES-GCM), the browser holds an opaque HttpOnly id; sockets use 30 s single-use tickets | web `e2e` (no Keycloak token in any response; cookie flags), `realtime.e2e.spec` (ticket reuse/forgery) |
+| Login CSRF, code interception, token replay | Authorization Code + PKCE S256, state bound to an HttpOnly cookie, nonce, single-use login record; new session id at each login | web `e2e`, `lib.test` |
+| Open redirects after login | `returnTo` accepts only same-site relative paths | `lib.test` |
+| Script injection, framing | per-request nonce CSP (`strict-dynamic`, no `unsafe-eval` in production), `frame-ancestors 'none'`, nosniff, COOP | web `e2e` (headers) |
+| CSRF on actions | server actions check Origin (Next), logout checks Origin, SameSite=Lax session cookie | web `e2e` |
+| Refresh-token rotation races logging users out | one refresher per session (Redis lock), others wait for its result | web `e2e` (6 parallel requests; fails without the lock) |
+| Customer moving themselves to another tenant | `customer_id` is a declared user-profile attribute that only admins can view or edit | realm import + web `e2e` setup |
 
 
 ## Bid engine (step 3) — how correctness is guaranteed
@@ -131,20 +154,46 @@ draft/scheduled/live and `archived` from finalized/cancelled. Staff can never se
 **Multiple API instances:** set `REDIS_URL` on every instance. Socket.IO rooms are then shared through the Redis adapter, so an event
 published by whichever instance's worker claimed it reaches sockets connected to any instance.
 
+## Web app (step 6)
+Next.js 15 (App Router) as a **backend-for-frontend**. Every page is a server component that calls the API with the user's token
+from the server-side session; every mutation is a server action that re-checks the session and re-validates input with the shared
+Zod schemas. The browser never receives a Keycloak token: not in cookies, storage, HTML or RSC payloads (the e2e suite checks every
+response).
+- **Sign-in:** `/auth/login` → Keycloak (Authorization Code + PKCE S256, state, nonce) → `/auth/callback` validates everything
+  (`openid-client`), rejects accounts with no TELUS role, mixed staff/customer roles, or a customer account without `customer_id`,
+  then creates a new session. `/auth/logout` (POST, same-origin) ends the session and the Keycloak SSO session.
+- **Sessions:** Redis, AES-256-GCM encrypted, keyed by a hash of the cookie; lifetime = the refresh token's, capped at 10 h. Access
+  tokens are refreshed server-side with a per-session lock (Keycloak rotates refresh tokens and revokes on reuse).
+- **Customers:** auction list; auction page with countdown, terms acceptance, per-lot bid forms (server-minted idempotency keys, so a
+  double-submit cannot bid twice), own position per lot via `GET /auctions/:id/my-positions`, results after close.
+  Live updates: the page opens a socket with a one-time ticket (`POST /socket-tickets` on the API, fetched server-side) and re-renders
+  from the server on each event — pushed messages never become the source of truth for numbers.
+- **Staff:** auctions list; create (times entered in the user's local time zone); lots (add, withdraw, delete); invitations (invite,
+  revoke); schedule / back to draft / cancel / finalise; live highest bid, leader and bid count; results; customers (create, status,
+  margin rule set, purchase limit); settings (security limits, margin rule sets). Buttons follow roles; the API enforces them.
+- Web env (see `scripts/gen-secrets.sh`): `WEB_URL`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `API_URL`, `API_PUBLIC_URL`,
+  `REDIS_URL`, `SESSION_SECRET`, `DISPLAY_TIMEZONE` (default Asia/Dubai). `WEB_ALLOWED_ORIGINS` when behind a proxy that rewrites Host.
+  The API needs `REALTIME_TICKET_SECRET` for browser sockets.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean; 122/122 tests pass (5 consecutive full runs, no deadlocks logged), the database ones against a real
-PostgreSQL 16 using the restricted runtime role and a non-superuser owner. The realtime and admin suites run the real AppModule over
+**Verified here:** typecheck clean (API and web); API 124/124 tests pass (repeated full runs, no deadlocks logged), the database ones
+against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner; web 23 unit tests and 8 Playwright end-to-end
+tests pass against a real **Keycloak 26.0.7** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
-checked to fail when the protection they cover is removed. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
+checked to fail when the protection they cover is removed, as was the web refresh-lock test. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
 
 **Not measured:** throughput. A hot lot serialises its bidders and each bid makes ~10 queries; on your hardware that likely means tens to a
 few hundred bids/second per lot. Load-test before an event, and collapse the reads into one CTE if it is not enough.
 
-**Written but NOT verified** (no Docker in the build environment): `docker-compose.yml`, the Keycloak realm import
-(JSON validated, never loaded into Keycloak), `create-user.sh`, and the Keycloak token mappers (`customer_id`, audience).
-Expect to iterate when you first run the stack. Specific things to check: the `telus-api` audience appears in access tokens,
-and `customer_id` appears for customer users.
+**Keycloak, now verified:** the realm imports; the `telus-api` audience and `customer_id` mappers work in real access tokens (the
+e2e suite logs in real users and the API accepts their tokens). Loading the realm found a real bug: Keycloak 24+ **silently dropped**
+the `customer_id` attribute (undeclared attributes are discarded by the declarative user profile), so every customer login would have
+been refused. The realm now declares it, admin-only. The web client is now confidential (the web server is the OIDC client); its
+secret and URL come from `TELUS_WEB_CLIENT_SECRET` / `TELUS_WEB_URL` at import.
+
+**Still NOT verified** (no Docker in the build environment): `docker-compose.yml` itself and `create-user.sh` (it wraps `kcadm.sh`
+through `docker compose exec`; the same admin operations were verified via the REST API).
 
 ## Known gaps — do not skip these before production
 1. **MFA is not enforced by the API.** It relies on Keycloak: `create-user.sh` sets `CONFIGURE_TOTP` as a required action, so users
@@ -165,9 +214,12 @@ and `customer_id` appears for customer users.
    snapshot them at scheduling time.
 9. No out-of-band notifications (email/SMS) for outbid/won/cancelled; no Excel/CSV import for lots (the bulk JSON endpoint takes up to
    1000 lots per call, so an importer only needs to parse the file and call it).
-10. Not built yet: web app, child-login provisioning via the Keycloak Admin API, credential vault for external-platform passwords,
-    payments port, dependency/secret scanning in CI, third-party penetration test.
+10. Web app: sessions end when the refresh token expires or refresh fails, but a user disabled in Keycloak keeps their current access
+    token until it expires (≤5 min) — no back-channel logout yet. The web app has no rate limiting of its own (the API's applies).
+    Customer team logins are still created in Keycloak by staff (`create-user.sh`); there is no self-service team management UI.
+11. Not built yet: child-login provisioning via the Keycloak Admin API, Excel lot import, invoices/payments UI, credential vault for
+    external-platform passwords, payments port, dependency/secret scanning in CI, third-party penetration test.
 
 ## Next
-6. Next.js web app on Keycloak (Auth.js, tokens kept server-side), including the staff console over the step-5 API · Excel lot import ·
-   Redis-backed rate limits · 7. Vault, payments, notifications, audit shipping, CI security scanning, penetration test.
+7. Customer team management (child logins via the Keycloak Admin API) · Excel lot import · invoices view · Redis-backed rate limits ·
+8. Notifications (email/SMS), vault, payments, audit shipping, CI (typecheck + unit + DB + e2e) and security scanning, penetration test.

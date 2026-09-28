@@ -50,13 +50,13 @@ export class TokenVerifier {
     if (staffRoles.length > 0 && customerRoles.length > 0) throw new ForbiddenPrincipalError('mixed staff/customer roles');
 
     if (staffRoles.length > 0) {
-      return { sub, username, kind: 'staff', roles: staffRoles, customerId: null, customerRole: null };
+      return { sub, username, kind: 'staff', roles: staffRoles, customerId: null, customerRole: null, tokenExp: payload.exp };
     }
     if (customerRoles.length > 0) {
       const customerId = payload['customer_id'];
       if (typeof customerId !== 'string' || !UUID_RE.test(customerId)) throw new ForbiddenPrincipalError('customer token without valid customer_id');
       const customerRole = CUSTOMER_ROLE_RANK.find((r) => customerRoles.includes(r)) ?? null;
-      return { sub, username, kind: 'customer', roles: customerRoles, customerId: customerId.toLowerCase(), customerRole };
+      return { sub, username, kind: 'customer', roles: customerRoles, customerId: customerId.toLowerCase(), customerRole, tokenExp: payload.exp };
     }
     throw new ForbiddenPrincipalError('no application role');
   }

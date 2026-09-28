@@ -18,6 +18,12 @@ export class BidsController {
     return this.bids.place(p, body, ip);
   }
 
+  @Get('auctions/:auctionId/my-positions')
+  @Roles(...CUSTOMER_ROLES)
+  myPositions(@CurrentPrincipal() p: Principal, @Param('auctionId', ParseUUIDPipe) auctionId: string) {
+    return this.bids.myPositions(p, auctionId);
+  }
+
   @Get('lots/:lotId/my-status')
   @Roles(...CUSTOMER_ROLES)
   myStatus(@CurrentPrincipal() p: Principal, @Param('lotId', ParseUUIDPipe) lotId: string) {

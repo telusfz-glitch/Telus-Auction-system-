@@ -25,44 +25,104 @@
   "otpPolicyPeriod": 30,
   "roles": {
     "realm": [
-      { "name": "super_admin", "description": "Full staff access" },
-      { "name": "auction_manager", "description": "Create/manage auctions and customers" },
-      { "name": "sales_manager", "description": "View customers, results, reports" },
-      { "name": "finance", "description": "Deposits, invoices, payments" },
-      { "name": "view_only", "description": "Read-only staff" },
-      { "name": "customer_admin", "description": "Customer org owner: bids + manages team logins" },
-      { "name": "customer_bidder", "description": "Customer team member who can bid" },
-      { "name": "customer_viewer", "description": "Customer team member, read-only" }
+      {
+        "name": "super_admin",
+        "description": "Full staff access"
+      },
+      {
+        "name": "auction_manager",
+        "description": "Create/manage auctions and customers"
+      },
+      {
+        "name": "sales_manager",
+        "description": "View customers, results, reports"
+      },
+      {
+        "name": "finance",
+        "description": "Deposits, invoices, payments"
+      },
+      {
+        "name": "view_only",
+        "description": "Read-only staff"
+      },
+      {
+        "name": "customer_admin",
+        "description": "Customer org owner: bids + manages team logins"
+      },
+      {
+        "name": "customer_bidder",
+        "description": "Customer team member who can bid"
+      },
+      {
+        "name": "customer_viewer",
+        "description": "Customer team member, read-only"
+      }
     ]
   },
   "clients": [
     {
       "clientId": "telus-web",
-      "name": "TELUS web app",
+      "name": "TELUS web app (server-side / BFF)",
       "enabled": true,
-      "publicClient": true,
+      "publicClient": false,
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:3000/*"],
-      "webOrigins": ["http://localhost:3000"],
-      "attributes": { "pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:3000/*" },
+      "redirectUris": [
+        "${TELUS_WEB_URL}/auth/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${TELUS_WEB_URL}/"
+      },
       "protocolMappers": [
         {
           "name": "telus-api-audience",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "telus-api", "id.token.claim": "false", "access.token.claim": "true" }
+          "config": {
+            "included.client.audience": "telus-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
         },
         {
           "name": "customer_id",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "config": { "user.attribute": "customer_id", "claim.name": "customer_id", "jsonType.label": "String", "id.token.claim": "false", "access.token.claim": "true" }
+          "config": {
+            "user.attribute": "customer_id",
+            "claim.name": "customer_id",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
         }
-      ]
+      ],
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${TELUS_WEB_CLIENT_SECRET}",
+      "frontchannelLogout": false
     },
-    { "clientId": "telus-api", "name": "TELUS API (resource server)", "enabled": true, "bearerOnly": true }
-  ]
+    {
+      "clientId": "telus-api",
+      "name": "TELUS API (resource server)",
+      "enabled": true,
+      "bearerOnly": true
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"customer_id\",\"displayName\":\"Customer ID\",\"permissions\":{\"view\":[\"admin\"],\"edit\":[\"admin\"]},\"validations\":{\"pattern\":{\"pattern\":\"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$\",\"error-message\":\"customer_id must be a UUID\"}},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ]
+  }
 }

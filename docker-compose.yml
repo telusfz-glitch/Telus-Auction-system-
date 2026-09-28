@@ -37,6 +37,9 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:?run scripts/gen-secrets.sh}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run scripts/gen-secrets.sh}
       KC_HEALTH_ENABLED: "true"
+      # Placeholders substituted into telus-realm.json at import (the web app's confidential client).
+      TELUS_WEB_URL: ${TELUS_WEB_URL:?run scripts/gen-secrets.sh}
+      TELUS_WEB_CLIENT_SECRET: ${TELUS_WEB_CLIENT_SECRET:?run scripts/gen-secrets.sh}
     volumes:
       - ./infra/keycloak/telus-realm.json:/opt/keycloak/data/import/telus-realm.json:ro
     ports: ["127.0.0.1:8080:8080"]

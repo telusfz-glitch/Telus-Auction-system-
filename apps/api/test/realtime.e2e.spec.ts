@@ -65,6 +65,7 @@ interface Probe { socket: Socket; events: Array<[string, any]> }
     priv = keys.privateKey;
     Object.assign(process.env, {
       NODE_ENV: 'test', DATABASE_URL: APP_URL, KEYCLOAK_ISSUER: ISS, API_AUDIENCE: AUD, CORS_ORIGINS: 'https://auction.telus.ae', WORKERS_ENABLED: 'false',
+      REALTIME_TICKET_SECRET: 'test-ticket-secret-0123456789abcdef0123456789',
     });
     const mod = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(TokenVerifier).useValue(new TokenVerifier({ issuer: ISS, audience: AUD, getKey: async () => keys.publicKey }))
@@ -151,6 +152,47 @@ interface Probe { socket: Socket; events: Array<[string, any]> }
     expect(fin.body.invoices).toEqual([expect.objectContaining({ invoiceNumber: 'INV-R-HID-CUST-0002', totalAmount: '650.00', lots: 1 })]);
     const res = await http().get(`/admin/auctions/${AU.HIDDEN}/results`).set('Authorization', `Bearer ${staffTok}`).expect(200);
     expect(res.body).toMatchObject({ status: 'finalized', lots: [{ lot_id: LOT.H1, outcome: 'won', winner_code: 'CUST-0002' }] });
+  });
+
+  it('my-positions: own status per lot; price and minimum next bid only where they reveal nothing new', async () => {
+    await admin.query(`UPDATE auctions SET status = 'live', close_at = now() + interval '1 hour' WHERE id = $1`, [AU.OTHER]);
+    const tC = await cust('customer_bidder', CU.C, 'c-bid');
+    await asStaff(admin, async (c) => { await c.query(`UPDATE auction_participants SET terms_accepted_at = now() WHERE auction_id = $1`, [AU.OTHER]); });
+    const before = await http().get(`/auctions/${AU.OTHER}/my-positions`).set('Authorization', `Bearer ${tC}`).expect(200);
+    expect(before.body).toEqual([{ lotId: LOT.O1, lotStatus: 'active', status: 'no_bid', myHighestBid: null, currentHighestBid: null, minNextBid: null }]);
+    await http().post('/bids').set('Authorization', `Bearer ${tC}`).send({ lotId: LOT.O1, amount: 100, idempotencyKey: 'k-c-000000000001' }).expect(201);
+    const leading = await http().get(`/auctions/${AU.OTHER}/my-positions`).set('Authorization', `Bearer ${tC}`).expect(200);
+    expect(leading.body[0]).toMatchObject({ status: 'leading', myHighestBid: '100.00', currentHighestBid: null, minNextBid: '125.00' });   // fallback +25
+    await http().get(`/auctions/${AU.OTHER}/my-positions`).set('Authorization', `Bearer ${await cust('customer_bidder', CU.A, 'a-bid')}`).expect(404);
+  });
+
+  it('tickets: a browser connects with a one-time ticket instead of a token; reuse, tampering and foreign keys are refused', async () => {
+    const tA = await cust('customer_bidder', CU.A, 'a-bid');
+    const issued = await http().post('/socket-tickets').set('Authorization', `Bearer ${tA}`).expect(201);
+    expect(issued.body.expiresIn).toBeGreaterThan(0);
+    expect(issued.body.expiresIn).toBeLessThanOrEqual(30);
+    const ticket: string = issued.body.ticket;
+    expect(ticket).not.toContain(tA);
+
+    const p = await connect({ ticket });
+    expect(await ask(p, 'auction.subscribe', { auctionId: AU.HIDDEN })).toEqual({ ok: true });   // principal carried over
+    expect(await ask(p, 'auction.subscribe', { auctionId: AU.OTHER })).toEqual({ ok: false, code: 'NOT_FOUND' });
+    p.socket.close();
+
+    await expect(connect({ ticket })).rejects.toThrow('unauthorized');                                // single use
+    const fresh: string = (await http().post('/socket-tickets').set('Authorization', `Bearer ${tA}`).expect(201)).body.ticket;
+    const [h, body, sig] = fresh.split('.');
+    const forged = JSON.parse(Buffer.from(body!, 'base64url').toString());
+    forged.p.customerId = CU.B;
+    await expect(connect({ ticket: `${h}.${Buffer.from(JSON.stringify(forged)).toString('base64url')}.${sig}` })).rejects.toThrow('unauthorized');
+    const { SignJWT } = await import('jose');
+    const foreign = await new SignJWT({ p: { sub: 'x', kind: 'staff', roles: ['super_admin'] }, tex: 9999999999 })
+      .setProtectedHeader({ alg: 'HS256', typ: 'telus-ticket' }).setIssuer('telus-api').setAudience('telus-realtime-ticket')
+      .setSubject('x').setJti('00000000-0000-4000-8000-000000000001').setIssuedAt().setExpirationTime('30s')
+      .sign(new TextEncoder().encode('some-other-secret-that-is-long-enough-000'));
+    await expect(connect({ ticket: foreign })).rejects.toThrow('unauthorized');
+    await expect(connect({ ticket: tA })).rejects.toThrow('unauthorized');                            // a token is not a ticket
+    await http().post('/socket-tickets').expect(401);
   });
 
   it('a socket is disconnected when its access token expires', async () => {

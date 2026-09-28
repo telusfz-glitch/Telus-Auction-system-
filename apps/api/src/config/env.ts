@@ -16,6 +16,8 @@ const EnvSchema = z.object({
   OUTBOX_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
   // Set when running more than one API instance: Socket.IO rooms are then shared through Redis.
   REDIS_URL: z.string().url().optional(),
+  // Enables POST /realtime/tickets (browser sockets without access tokens). Used for nothing else.
+  REALTIME_TICKET_SECRET: z.string().min(32).optional(),
 });
 export type Env = z.infer<typeof EnvSchema>;
 

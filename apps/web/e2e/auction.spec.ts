@@ -1,0 +1,221 @@
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { Pool } from 'pg';
+import { createClient } from 'redis';
+import { keyOf, seal, unseal } from '../src/lib/crypto';
+import { PASSWORD, STACK, USERS } from './stack';
+
+test.describe.configure({ mode: 'serial' });
+
+/** RS256 JWT header as Keycloak writes it. No response the browser receives may ever contain one. */
+const KEYCLOAK_TOKEN_PREFIX = 'eyJhbGciOiJSUzI1NiIs';
+const leaks: string[] = [];
+let inspected = 0;
+
+async function newUser(browser: Browser, who: keyof typeof USERS): Promise<{ ctx: BrowserContext; page: Page }> {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  page.on('dialog', (d) => d.accept());
+  page.on('response', async (res) => {
+    const type = res.headers()['content-type'] ?? '';
+    if (!/html|json|text|javascript|x-component/.test(type) || res.url().startsWith(STACK.keycloakUrl)) return;
+    const body = await res.text().catch(() => '');
+    inspected += 1;
+    if (body.includes(KEYCLOAK_TOKEN_PREFIX)) leaks.push(`${who}: ${res.url()}`);
+  });
+  await page.goto('/');
+  await page.getByTestId('sign-in').click();
+  await page.locator('#username').fill(USERS[who].email);
+  await page.locator('#password').fill(PASSWORD);
+  await page.locator('#kc-login').click();
+  await page.waitForURL((u) => u.origin === new URL(STACK.webUrl).origin);
+  return { ctx, page };
+}
+
+/** datetime-local value in Asia/Dubai (UTC+4, no DST), the browser time zone configured for these tests. */
+const dubaiInput = (d: Date) => new Date(d.getTime() + 4 * 3600_000).toISOString().slice(0, 16);
+const lotRow = (page: Page, lot: string) => page.getByTestId(`lot-${lot}`);
+
+let auctionPath = '';
+
+test('anonymous visitors see only the sign-in page, with strict security headers', async ({ page }) => {
+  const res = await page.goto('/');
+  const csp = res!.headers()['content-security-policy'] ?? '';
+  expect(csp).toContain("script-src 'self' 'nonce-");
+  expect(csp).toContain("frame-ancestors 'none'");
+  expect(csp).not.toContain('unsafe-eval');
+  expect(res!.headers()['x-powered-by']).toBeUndefined();
+  await expect(page.getByTestId('sign-in')).toBeVisible();
+  await page.goto('/admin');
+  await expect(page).toHaveURL(/\/realms\/telus\/protocol\/openid-connect\/auth/);
+});
+
+test('an account without a TELUS role is refused after Keycloak login', async ({ browser }) => {
+  const { ctx, page } = await newUser(browser, 'noRole');
+  await expect(page).toHaveURL(/\?login=denied/);
+  await expect(page.getByText('This account has no access')).toBeVisible();
+  expect((await ctx.cookies()).some((c) => c.name.includes('telus_sid'))).toBe(false);
+  await ctx.close();
+});
+
+test('staff: create a draft, add lots, invite customers, schedule → the scheduler opens it', async ({ browser }) => {
+  const { ctx, page } = await newUser(browser, 'manager');
+  await expect(page).toHaveURL(/\/admin$/);
+
+  // The session cookie is an opaque HttpOnly id; no token is stored in the browser.
+  const cookies = await ctx.cookies();
+  const sid = cookies.find((c) => c.name === 'telus_sid')!;
+  expect(sid).toMatchObject({ httpOnly: true, sameSite: 'Lax' });
+  expect(sid.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(await page.evaluate(() => document.cookie)).not.toContain('telus_sid');
+  expect(await page.evaluate(() => JSON.stringify(localStorage) + JSON.stringify(sessionStorage))).not.toContain('eyJ');
+
+  await page.getByRole('link', { name: 'New auction' }).click();
+  await page.getByLabel('Auction number').fill('E2E-001');
+  await page.getByLabel('Name').fill('October handsets');
+  await page.getByRole('textbox', { name: 'Opens' }).fill(dubaiInput(new Date(Date.now() - 120_000)));
+  await page.getByRole('textbox', { name: 'Closes' }).fill(dubaiInput(new Date(Date.now() + 30 * 60_000)));
+  await page.getByRole('button', { name: 'Create draft' }).click();
+  await expect(page).toHaveURL(/\/admin\/auctions\/[0-9a-f-]{36}$/);
+  auctionPath = new URL(page.url()).pathname.replace('/admin', '');
+  await expect(page.getByTestId('auction-status')).toHaveText('Draft');
+
+  await page.getByRole('button', { name: 'Schedule' }).click();
+  await expect(page.getByText('Add at least one lot before scheduling.')).toBeVisible();
+
+  for (const [no, desc, qty, price] of [['L1', 'iPhone 15 128GB grade A', '10', '100'], ['L2', 'Galaxy S24 sealed', '2', '1500']] as const) {
+    await page.getByLabel('Lot no.').fill(no);
+    await page.getByLabel('Description').fill(desc);
+    await page.getByLabel('Qty').fill(qty);
+    await page.getByLabel('Starting price (AED)').fill(price);
+    await page.getByRole('button', { name: 'Add lot' }).click();
+    await expect(lotRow(page, no)).toBeVisible();
+  }
+  await page.getByLabel('Customers').selectOption([{ label: 'CUST-0001 · Alpha Trading LLC (active)' }, { label: 'CUST-0002 · Beta Mobile FZE (active)' }]);
+  await page.getByRole('button', { name: 'Invite' }).click();
+  await expect(page.getByTestId('participants')).toContainText('Alpha Trading LLC');
+  await expect(page.getByTestId('participants')).toContainText('Beta Mobile FZE');
+
+  await page.getByRole('button', { name: 'Schedule' }).click();
+  await expect.poll(async () => { await page.reload(); return page.getByTestId('auction-status').textContent(); }, { timeout: 20_000 }).toBe('Live');
+  await ctx.close();
+});
+
+test('view-only staff and customer viewers can look but not act', async ({ browser }) => {
+  const staff = await newUser(browser, 'viewOnly');
+  await staff.page.goto(`/admin${auctionPath}`);
+  await expect(staff.page.getByTestId('auction-status')).toHaveText('Live');
+  await expect(staff.page.getByTestId('transitions')).toHaveCount(0);
+  await expect(staff.page.getByRole('button', { name: 'Withdraw' })).toHaveCount(0);
+  await staff.ctx.close();
+
+  const viewer = await newUser(browser, 'alphaViewer');
+  await expect(viewer.page).toHaveURL(/\/auctions$/);
+  await viewer.page.goto(auctionPath);
+  await expect(viewer.page.getByText('must accept the terms before bidding')).toBeVisible();
+  await expect(viewer.page.getByRole('button', { name: 'Accept terms' })).toHaveCount(0);
+  await expect(viewer.page.getByRole('button', { name: 'Bid' })).toHaveCount(0);
+  await viewer.page.goto('/admin');                         // customers never see staff pages
+  await expect(viewer.page).toHaveURL(/\/auctions$/);
+  await viewer.ctx.close();
+});
+
+test('two customers bid; positions update live over the socket; hidden prices stay hidden', async ({ browser }) => {
+  const alpha = await newUser(browser, 'alphaAdmin');
+  const beta = await newUser(browser, 'betaBidder');
+  for (const u of [alpha, beta]) {
+    await u.page.goto(auctionPath);
+    await u.page.getByRole('button', { name: 'Accept terms' }).click();
+    await expect(u.page.getByRole('button', { name: 'Bid' }).first()).toBeVisible();
+    await expect(u.page.getByTestId('live-state')).toHaveAttribute('data-state', 'live');
+  }
+
+  const bid = async (p: Page, lot: string, amount: string) => {
+    await lotRow(p, lot).getByRole('textbox').fill(amount);
+    await lotRow(p, lot).getByRole('button', { name: 'Bid' }).click();
+  };
+  await bid(alpha.page, 'L1', '100');
+  await expect(lotRow(alpha.page, 'L1').getByTestId('position')).toHaveText('Leading');
+  await expect(lotRow(alpha.page, 'L1').getByTestId('my-bid')).toHaveText('AED 100.00');
+
+  await bid(beta.page, 'L1', '110');
+  await expect(lotRow(beta.page, 'L1').getByTestId('position')).toHaveText('Leading');
+  // Alpha's page changes WITHOUT a reload: the push arrives over the ticket-authenticated socket.
+  await expect(lotRow(alpha.page, 'L1').getByTestId('position')).toHaveText('Outbid');
+  await expect(alpha.page.getByTestId('live-notice')).toContainText('outbid on lot L1');
+  await expect(alpha.page.locator('main')).not.toContainText('110');   // winning_losing_only: Beta's price is never shown
+
+  await bid(alpha.page, 'L1', '115');                                  // below Beta's 110 + Alpha's own 10 increment
+  await expect(lotRow(alpha.page, 'L1')).toContainText('Your bid is too low.');
+  await expect(lotRow(alpha.page, 'L1')).not.toContainText('120');     // the minimum is not disclosed either
+  await bid(alpha.page, 'L1', '120');
+  await expect(lotRow(alpha.page, 'L1').getByTestId('position')).toHaveText('Leading');
+  await expect(lotRow(beta.page, 'L1').getByTestId('position')).toHaveText('Outbid');
+
+  const staff = await newUser(browser, 'manager');
+  await staff.page.goto(`/admin${auctionPath}`);
+  await expect(lotRow(staff.page, 'L1').getByTestId('highest')).toHaveText('AED 120.00');
+  await expect(lotRow(staff.page, 'L1')).toContainText('CUST-0001');
+
+  // ---- close (moved to "now" in the database) → scheduler allocates → pages update → staff finalise ----
+  const db = new Pool({ connectionString: STACK.dbAdminUrl });
+  await db.query('UPDATE auctions SET close_at = clock_timestamp() WHERE id = $1', [auctionPath.split('/').pop()]);
+  await db.end();
+  await expect(alpha.page.getByTestId('auction-status')).toHaveText('Closed', { timeout: 20_000 });
+  await expect(alpha.page.getByTestId('results')).toContainText('AED 1,200.00');   // 10 × 120
+  await expect(lotRow(alpha.page, 'L1').getByTestId('position')).toHaveText('Won');
+  await beta.page.reload();
+  await expect(beta.page.getByText('You did not win any lots in this auction.')).toBeVisible();
+
+  await staff.page.reload();
+  await staff.page.getByRole('button', { name: 'Finalise & create invoices' }).click();
+  await expect(staff.page.getByTestId('auction-status')).toHaveText('Finalised');
+  await expect(staff.page.getByTestId('finalized-note')).toBeVisible();
+  await expect(staff.page.getByTestId('results')).toContainText('CUST-0001 · Alpha Trading LLC');
+
+  // ---- sign-out ends the Keycloak SSO session too: coming back requires the password again ----
+  await alpha.page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(alpha.page.getByTestId('sign-in')).toBeVisible();
+  await alpha.page.goto('/auctions');
+  await expect(alpha.page.locator('#username')).toBeVisible();
+
+  for (const u of [alpha, beta, staff]) await u.ctx.close();
+});
+
+test('a forged or stale session cookie gets no access', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  await ctx.addCookies([{ name: 'telus_sid', value: 'A'.repeat(43), url: STACK.webUrl }]);
+  const page = await ctx.newPage();
+  await page.goto('/admin');
+  await expect(page).toHaveURL(/\/realms\/telus\/protocol\/openid-connect\/auth/);
+  await ctx.close();
+});
+
+test('an expired access token is refreshed exactly once, even when parallel requests all need it', async ({ browser }) => {
+  const { ctx, page } = await newUser(browser, 'alphaViewer');
+  const sid = (await ctx.cookies()).find((c) => c.name === 'telus_sid')!.value;
+  const r = createClient({ url: STACK.redisUrl });
+  await r.connect();
+  const key = keyOf('sess', sid);
+  const read = async () => JSON.parse(unseal((await r.get(key))!, STACK.sessionSecret)!);
+  const before = await read();
+  expect(before.accessToken).toMatch(/^eyJ/);                       // stored server-side, encrypted at rest
+  expect(await r.get(key)).not.toContain('eyJ');
+  await r.set(key, seal(JSON.stringify({ ...before, accessExp: Math.floor(Date.now() / 1000) - 1 }), STACK.sessionSecret), { KEEPTTL: true });
+
+  // Keycloak rotates refresh tokens and revokes on reuse: without the lock, parallel refreshes would log the user out.
+  const results = await Promise.all(Array.from({ length: 6 }, () => page.request.get('/auctions', { maxRedirects: 0 })));
+  expect(results.map((x) => x.status())).toEqual([200, 200, 200, 200, 200, 200]);
+  const after = await read();
+  expect(after.accessToken).not.toBe(before.accessToken);
+  expect(after.refreshToken).not.toBe(before.refreshToken);
+  expect(after.accessExp).toBeGreaterThan(Math.floor(Date.now() / 1000) + 60);
+  await page.goto('/auctions');
+  await expect(page.getByRole('heading', { name: 'My auctions' })).toBeVisible();
+  await r.quit();
+  await ctx.close();
+});
+
+test('no Keycloak token ever reached the browser in any response', () => {
+  expect(inspected).toBeGreaterThan(30);                              // the check really looked at the traffic
+  expect(leaks).toEqual([]);
+});

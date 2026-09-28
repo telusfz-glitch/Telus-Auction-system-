@@ -11,6 +11,7 @@ import type { Principal } from '../auth/principal';
 import { TokenVerifier } from '../auth/token-verifier';
 import { DbService } from '../db/db.service';
 import { rooms, type Delivery } from './routing';
+import { TicketService } from './ticket.service';
 
 const MAX_TOKEN_LENGTH = 8192;
 const MAX_AUCTION_SUBSCRIPTIONS = 20;
@@ -20,9 +21,9 @@ type Client = Socket<Record<string, never>, Record<string, never>, Record<string
 export type Ack = { ok: true } | { ok: false; code: string };
 
 /**
- * Realtime push over Socket.IO at path /realtime. The client sends its Keycloak access token in the handshake
- * (`auth: { token }`); the same verifier as the HTTP API checks it, and the socket is disconnected when the token
- * expires (the client reconnects with a fresh one). Customers join their own `customer:<id>` room; they join an
+ * Realtime push over Socket.IO at path /realtime. The handshake carries either a one-time ticket (`auth: { ticket }`,
+ * what browsers use, see ticket.service.ts) or a Keycloak access token (`auth: { token }`, checked by the same verifier
+ * as the HTTP API). The socket is disconnected when the underlying token expires (the client reconnects). Customers join their own `customer:<id>` room; they join an
  * `auction:<id>` room only if RLS lets them see that auction. What each room hears is decided by ./routing.ts.
  */
 @WebSocketGateway({ path: '/realtime', serveClient: false })
@@ -30,20 +31,27 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   private readonly logger = new Logger(RealtimeGateway.name);
   @WebSocketServer() server!: Server;
 
-  constructor(private readonly verifier: TokenVerifier, private readonly db: DbService) {}
+  constructor(private readonly verifier: TokenVerifier, private readonly tickets: TicketService, private readonly db: DbService) {}
 
   afterInit(server: Server): void {
     server.use((socket: Client, next) => {
-      const token: unknown = socket.handshake.auth?.['token'];
-      if (typeof token !== 'string' || !token || token.length > MAX_TOKEN_LENGTH) return next(new Error('unauthorized'));
-      this.verifier.verify(token).then(
-        (principal) => {
-          socket.data.principal = principal;
-          socket.data.exp = decodeJwt(token).exp;
-          next();
-        },
-        () => next(new Error('unauthorized')),   // one message for every failure: no oracle for token probing
-      );
+      const auth = socket.handshake.auth ?? {};
+      const ticket: unknown = auth['ticket'];
+      const token: unknown = auth['token'];
+      const ok = (principal: Principal, exp: number | undefined) => {
+        socket.data.principal = principal;
+        socket.data.exp = exp;
+        next();
+      };
+      const fail = () => next(new Error('unauthorized'));   // one message for every failure: no oracle for probing
+      // Browsers present a one-time ticket (the web app keeps tokens server-side); API clients may present a token.
+      if (typeof ticket === 'string' && ticket.length > 0 && ticket.length <= MAX_TOKEN_LENGTH && this.tickets.enabled) {
+        this.tickets.redeem(ticket).then((t) => ok(t.principal, t.tokenExp), fail);
+      } else if (typeof token === 'string' && token.length > 0 && token.length <= MAX_TOKEN_LENGTH) {
+        this.verifier.verify(token).then((p) => ok(p, decodeJwt(token).exp), fail);
+      } else {
+        fail();
+      }
     });
   }
 
