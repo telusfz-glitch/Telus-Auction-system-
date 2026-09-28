@@ -9,6 +9,10 @@ const EnvSchema = z.object({
   API_AUDIENCE: z.string().min(1).default('telus-api'),
   CORS_ORIGINS: z.string().default(''),
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  // Background loops (auction scheduler, outbox → realtime publisher). Off only for tooling/tests.
+  WORKERS_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  SCHEDULER_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1000),
+  OUTBOX_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(250),
 });
 export type Env = z.infer<typeof EnvSchema>;
 

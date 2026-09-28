@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { createRemoteJWKSet } from 'jose';
 import { AppController } from './app.controller';
+import { AuctionsController } from './auctions/auctions.controller';
+import { AuctionsService } from './auctions/auctions.service';
 import { AuditService } from './audit/audit.service';
 import { BidsController } from './bids/bids.controller';
 import { BidsService } from './bids/bids.service';
+import { HttpThrottlerGuard } from './auth/http-throttler.guard';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { TokenVerifier } from './auth/token-verifier';
@@ -13,10 +16,14 @@ import { loadEnv, type Env } from './config/env';
 import { ENV } from './config/tokens';
 import { CustomersController } from './customers/customers.controller';
 import { DbService } from './db/db.service';
+import { LifecycleService } from './lifecycle/lifecycle.service';
+import { OutboxService } from './outbox/outbox.service';
+import { RealtimeGateway } from './realtime/realtime.gateway';
+import { WorkersService } from './workers/workers.service';
 
 @Module({
   imports: [ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }])],
-  controllers: [AppController, CustomersController, BidsController],
+  controllers: [AppController, CustomersController, BidsController, AuctionsController],
   providers: [
     { provide: ENV, useFactory: () => loadEnv() },
     {
@@ -35,8 +42,14 @@ import { DbService } from './db/db.service';
     DbService,
     AuditService,
     BidsService,
-    // Guard order matters: rate-limit → authenticate → authorize. All global, so new routes are protected by default.
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    AuctionsService,
+    LifecycleService,
+    OutboxService,
+    RealtimeGateway,
+    WorkersService,
+    // Guard order matters: rate-limit → authenticate → authorize. All global, so new routes (and socket
+    // handlers) are protected by default.
+    { provide: APP_GUARD, useClass: HttpThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

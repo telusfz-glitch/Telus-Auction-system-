@@ -20,13 +20,26 @@ export class DbService implements OnModuleDestroy {
    * Querying without a principal returns zero rows (RLS fails closed).
    */
   async withPrincipal<T>(p: Principal, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.inContext([p.kind, p.customerId ?? '', p.customerRole ?? '', p.sub], fn);
+  }
+
+  /**
+   * For background workers only (scheduler, outbox publisher) — never reachable from a request. The 'system'
+   * context can read lots and bids and call the owner-run lifecycle/outbox functions (see 003_lifecycle.sql);
+   * those functions refuse any other context, so a request running as a customer or staff member cannot.
+   */
+  async withSystem<T>(worker: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.inContext(['system', '', '', `system:${worker}`], fn);
+  }
+
+  private async inContext<T>(ctx: [string, string, string, string], fn: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       await client.query(
         `SELECT set_config('app.role', $1, true), set_config('app.customer_id', $2, true),
                 set_config('app.customer_role', $3, true), set_config('app.user_sub', $4, true)`,
-        [p.kind, p.customerId ?? '', p.customerRole ?? '', p.sub],
+        ctx,
       );
       const result = await fn(client);
       await client.query('COMMIT');

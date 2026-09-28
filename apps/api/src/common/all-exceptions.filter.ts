@@ -8,6 +8,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger('Exceptions');
 
   catch(exception: unknown, host: ArgumentsHost): void {
+    // Socket handlers answer via acks and never throw by design; anything else is logged, never sent.
+    if (host.getType() !== 'http') {
+      this.logger.error(`[${host.getType()}]`, exception instanceof Error ? exception.stack : String(exception));
+      return;
+    }
     const http = host.switchToHttp();
     const res = http.getResponse();
     const req = http.getRequest();

@@ -23,3 +23,7 @@ export const PlaceBidSchema = z
   })
   .strict();
 export type PlaceBidInput = z.infer<typeof PlaceBidSchema>;
+
+/** Socket.IO `auction.subscribe` / `auction.unsubscribe` payload. */
+export const AuctionSubscriptionSchema = z.object({ auctionId: z.string().uuid() }).strict();
+export type AuctionSubscription = z.infer<typeof AuctionSubscriptionSchema>;

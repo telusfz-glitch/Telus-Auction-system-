@@ -10,7 +10,7 @@ describe('Full app wiring — real AppModule + real security configuration', () 
   beforeAll(async () => {
     Object.assign(process.env, {
       NODE_ENV: 'test', DATABASE_URL: 'postgres://u:p@127.0.0.1:1/none', KEYCLOAK_ISSUER: 'http://localhost:8080/realms/telus',
-      API_AUDIENCE: 'telus-api', CORS_ORIGINS: 'https://auction.telus.ae',
+      API_AUDIENCE: 'telus-api', CORS_ORIGINS: 'https://auction.telus.ae', WORKERS_ENABLED: 'false',
     });
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = mod.createNestApplication();
