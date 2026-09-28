@@ -269,12 +269,16 @@ test('team: a customer admin creates a login; the new person must set a password
   await expect(page).toHaveURL(/\/auctions$/);
   await expect(page.getByTestId('whoami')).toHaveText('Nadia New');
   await expect(page.getByRole('link', { name: 'October handsets' })).toBeVisible();   // same company, same invitations
-  await page.getByRole('button', { name: 'Sign out' }).click();
 
-  // Suspended by the admin → Keycloak refuses the next sign-in.
+  // Suspended by the admin WHILE signed in → Keycloak's back-channel logout ends the web session at once
+  // (not at the next token refresh): the very next page load goes to the sign-in page.
   const member = alpha.page.getByTestId('member-newbidder@alpha.test');
   await member.getByRole('button', { name: 'Suspend' }).click();
   await expect(member).toContainText('suspended');
+  await expect.poll(async () => { await page.goto('/auctions'); return new URL(page.url()).origin; }, { timeout: 10_000 })
+    .toBe(new URL(STACK.keycloakUrl).origin);
+  // ...and Keycloak refuses the next sign-in.
+  await page.goto('/');
   await page.getByTestId('sign-in').click();
   await page.locator('#username').fill('newbidder@alpha.test');
   await page.locator('#password').fill('Nadia-Own-Passw0rd!2026');
@@ -283,6 +287,19 @@ test('team: a customer admin creates a login; the new person must set a password
 
   await ctx.close();
   await alpha.ctx.close();
+});
+
+test('back-channel logout accepts only genuine, fresh, single-use Keycloak logout tokens', async ({ request }) => {
+  const post = (logout_token: string) => request.post('/auth/backchannel-logout', { form: { logout_token } });
+  expect((await post('not-a-token')).status()).toBe(400);
+  // Correct shape, signed with a key Keycloak does not have → refused.
+  const { SignJWT, generateKeyPair } = await import('jose');
+  const { privateKey } = await generateKeyPair('RS256');
+  const forged = await new SignJWT({ events: { 'http://schemas.openid.net/event/backchannel-logout': {} }, sid: 'x' })
+    .setProtectedHeader({ alg: 'RS256', kid: 'forged' }).setIssuer(`${STACK.keycloakUrl}/realms/telus`).setAudience('telus-web')
+    .setSubject('someone').setIssuedAt().setJti('j-1').sign(privateKey);
+  expect((await post(forged)).status()).toBe(400);
+  expect((await request.get('/auth/backchannel-logout')).status()).toBe(405);
 });
 
 test('a forged or stale session cookie gets no access', async ({ browser }) => {

@@ -210,10 +210,22 @@ response).
 - **Dependencies:** NestJS 10 → 11 (clears `multer`/`body-parser` advisories), `postcss` and `uuid` overridden to patched releases.
   `npm audit --omit=dev`: 0 vulnerabilities.
 
+## Notifications and session hygiene (step 8)
+- **Email notifications** (`src/notifications`, `007_notifications.sql`): outbid, lots won (per winning company, its own lots only),
+  auction cancelled, invoice issued. The outbox publisher queues them in the same transaction that claims the events (dedupe keys
+  absorb redelivery); a worker sends them over `SMTP_URL` with exponential-backoff retries. At most one outbid email per company,
+  lot and 10 minutes. Outbid emails go to the company's active admins and bidders and never name the competitor; the price appears
+  only in `full_price` auctions. HTML is escaped and subjects are single-line.
+- **Back-channel logout**: Keycloak calls `POST /auth/backchannel-logout` on the web app when a user's session ends (sign-out
+  elsewhere, an administrator ending sessions, a suspended login). The signed logout token is verified (issuer, audience, event,
+  no nonce, ≤2 min old, single-use `jti`) and every matching web session is deleted immediately.
+- **Keycloak 26.6.4** with the service account confined by fine-grained admin permissions v2 (see step 7) and the OTP policy fixed;
+  the e2e suite enrols a real authenticator.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 133/133 tests pass (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 142/142 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
-Admin API; web 26 unit tests and 10 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
+Admin API; web 26 unit tests and 11 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
 checked to fail when the protection they cover is removed, as was the web refresh-lock test. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
@@ -248,19 +260,20 @@ through `docker compose exec`; the same admin operations were verified via the R
 4. Migrations here run as a superuser (`telus_owner` in the dev image). Production should use a separate non-superuser owner role.
 5. Audit chain stops tampering by application code and by the owner *unless they drop the triggers*. Stream `audit_logs` to
    write-once storage (S3 Object Lock) to close that.
-6. A suspended login or a suspended *customer* cannot bid from that moment, but already-open pages and sockets keep receiving public
-   auction events until the access token expires (≤5 min); there is no back-channel logout to the web app yet. Revoking an
-   *invitation* evicts the customer's sockets at once.
+6. A suspended login loses its web session at once (back-channel logout) and cannot bid; an already-open *socket* keeps receiving
+   public auction events until its access token expires (≤5 min). Suspending a whole *customer* stops bids immediately but does not
+   end its users' sessions (suspend the logins too, or revoke the invitation, which evicts sockets at once).
 7. The exposure check stops counting an auction's lots once it is `finalized` (step-3 rule). If purchase limits should include
    unpaid invoices, count them explicitly.
 8. Changing a margin rule set takes effect on the next bid, including in live auctions. If brackets must be frozen per auction,
    snapshot them at scheduling time.
-9. Temporary passwords for new logins are shown once to the person who created them, who must pass them on; there is no email
-   delivery (Keycloak's execute-actions email needs SMTP configured). No out-of-band notifications (email/SMS) for outbid/won either.
+9. Temporary passwords for new logins are shown once to the person who created them, who must pass them on (Keycloak can email a
+   set-up link instead once its own SMTP is configured; not wired yet). Notifications are email only (no SMS), and emails stay
+   queued — not sent — until `SMTP_URL` is set.
 10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
-11. Not built yet: notifications, credential vault for external-platform passwords, payments port, audit shipping, secret scanning in
-    CI, third-party penetration test, load test.
+11. Not built yet: credential vault for external-platform passwords, payments port, audit shipping, secret scanning in CI,
+    third-party penetration test, load test.
 
 ## Next
-8. Email delivery (SMTP) for new logins, outbid and won notices ·
-   back-channel logout · load test · 9. Vault, payments, audit shipping to write-once storage, secret scanning, penetration test.
+9. Load test and query tuning for hot lots · Keycloak set-up-link emails for new logins · notification preferences ·
+10. Vault, payments, audit shipping to write-once storage, secret scanning, penetration test.

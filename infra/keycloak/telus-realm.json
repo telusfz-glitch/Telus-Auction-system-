@@ -87,7 +87,10 @@
       "webOrigins": [],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "${TELUS_WEB_URL}/"
+        "post.logout.redirect.uris": "${TELUS_WEB_URL}/",
+        "backchannel.logout.url": "${TELUS_WEB_URL}/auth/backchannel-logout",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "false"
       },
       "protocolMappers": [
         {

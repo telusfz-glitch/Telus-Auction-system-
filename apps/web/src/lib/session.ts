@@ -24,6 +24,8 @@ export interface Session {
   refreshToken: string | null;
   refreshExp: number;    // epoch seconds; the session ends with the refresh token
   idToken: string | null;
+  /** Keycloak's session id (`sid`): back-channel logout names it. */
+  kcSid: string | null;
   createdAt: number;
 }
 /** What UI code gets: identity and roles, never tokens. */
@@ -66,6 +68,7 @@ export function identityFromTokens(tokens: client.TokenEndpointResponse & client
     refreshToken: tokens.refresh_token ?? previous?.refreshToken ?? null,
     refreshExp: Math.min(t + refreshIn, createdAt + ABSOLUTE_MAX_SECONDS),
     idToken: tokens.id_token ?? previous?.idToken ?? null,
+    kcSid: typeof id?.['sid'] === 'string' ? (id['sid'] as string) : typeof claims['sid'] === 'string' ? (claims['sid'] as string) : previous?.kcSid ?? null,
     createdAt,
   };
 }
@@ -78,7 +81,27 @@ function decodePayload(jwt: string): Record<string, unknown> {
 
 async function save(sid: string, s: Session): Promise<void> {
   const ttl = Math.max(1, s.refreshExp - now());
-  await (await redis()).set(keyOf('sess', sid), seal(JSON.stringify(s), env().SESSION_SECRET), { EX: ttl });
+  const r = await redis();
+  const key = keyOf('sess', sid);
+  // Indexes for back-channel logout: Keycloak names a user (sub) and/or one of its sessions (sid).
+  const idx = [keyOf('sess-sub', s.sub), ...(s.kcSid ? [keyOf('sess-kcsid', s.kcSid)] : [])];
+  const m = r.multi().set(key, seal(JSON.stringify(s), env().SESSION_SECRET), { EX: ttl });
+  for (const i of idx) m.sAdd(i, key).expire(i, ABSOLUTE_MAX_SECONDS);
+  await m.exec();
+}
+
+/**
+ * Back-channel logout: ends every web session of a Keycloak session (`sid`) or, without one, of a user (`sub`).
+ * Returns how many sessions were ended.
+ */
+export async function destroySessionsFor(target: { sub?: string; sid?: string }): Promise<number> {
+  const r = await redis();
+  const idx = target.sid ? keyOf('sess-kcsid', target.sid) : target.sub ? keyOf('sess-sub', target.sub) : null;
+  if (!idx) return 0;
+  const keys = await r.sMembers(idx);
+  if (keys.length) await r.del(keys);
+  await r.del(idx);
+  return keys.length;
 }
 
 async function load(sid: string): Promise<Session | null> {

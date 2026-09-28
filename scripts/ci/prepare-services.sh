@@ -14,7 +14,8 @@ for db in telus_test telus_e2e_test; do
 done
 
 if [ "${WITH_KEYCLOAK:-1}" = "1" ]; then
-  docker run -d --name keycloak -p 8080:8080 \
+  # Host networking: Keycloak must reach the web app on localhost:3000 for back-channel logout.
+  docker run -d --name keycloak --network host \
     -e KC_BOOTSTRAP_ADMIN_USERNAME=kcadmin -e KC_BOOTSTRAP_ADMIN_PASSWORD=kcadminpw \
     -e TELUS_WEB_URL=http://localhost:3000 \
     -e TELUS_WEB_CLIENT_SECRET=e2e-web-client-secret-0123456789 \
