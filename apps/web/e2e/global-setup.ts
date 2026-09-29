@@ -1,9 +1,29 @@
+import { createServer } from 'http';
 import { Pool } from 'pg';
 import { migrate } from '../../api/src/db/migrate';
-import { CREATED_IN_TEST, CUSTOMER, NOT_PREENROLLED, PASSWORD, STACK, STAFF_OTP_SECRET, STAFF_ROLES_E2E, USERS } from './stack';
+import { CREATED_IN_TEST, CUSTOMER, NOT_PREENROLLED, PASSWORD, STACK, STAFF_OTP_SECRET, STAFF_ROLES_E2E, STRIPE, USERS } from './stack';
 
 /** Fresh database + seed data, and real Keycloak users (created through the admin REST API, like create-user.sh). */
+/** Minimal stand-in for api.stripe.com: creates Checkout sessions (honouring idempotency keys, like Stripe). */
+async function startStripeStub(): Promise<() => Promise<void>> {
+  const sessions = new Map<string, string>();
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      if (req.method !== 'POST' || req.url !== '/v1/checkout/sessions') { res.writeHead(404).end('{}'); return; }
+      const key = String(req.headers['idempotency-key'] ?? Math.random());
+      const id = sessions.get(key) ?? `cs_test_e2e_${sessions.size + 1}_${Date.now()}`;
+      sessions.set(key, id);
+      res.writeHead(200, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ id, object: 'checkout.session', url: `https://checkout.stripe.com/c/pay/${id}` }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(STRIPE.apiPort, '127.0.0.1', r));
+  return () => new Promise<void>((r) => server.close(() => r()));
+}
+
 export default async function globalSetup() {
+  const stopStripe = await startStripeStub();
   const dbName = new URL(STACK.dbAdminUrl).pathname.slice(1);
   if (!/test/i.test(dbName)) throw new Error(`Refusing to reset "${dbName}": e2e database name must contain "test"`);
 
@@ -76,4 +96,5 @@ export default async function globalSetup() {
       await call(`/users/${created!.id}/role-mappings/realm`, { method: 'POST', body: JSON.stringify([role]) });
     }
   }
+  return stopStripe;
 }

@@ -8,7 +8,9 @@ import { mapPgError } from '../common/pg-errors';
 import { DbService } from '../db/db.service';
 
 const INVOICE = `i.id, i.invoice_number, i.customer_id, i.total_amount, i.status, i.created_at, i.settled_at, i.settlement_note,
-  a.number AS auction_number, a.name AS auction_name, cu.code AS customer_code, cu.company_name`;
+  a.number AS auction_number, a.name AS auction_name, cu.code AS customer_code, cu.company_name,
+  (SELECT json_build_object('status', p.status, 'detail', p.status_detail, 'at', coalesce(p.completed_at, p.created_at))
+     FROM payments p WHERE p.invoice_id = i.id ORDER BY p.created_at DESC LIMIT 1) AS last_payment`;
 const LINES = `coalesce((SELECT json_agg(json_build_object('lotNumber', l.lot_number, 'description', l.description,
   'quantity', il.quantity, 'unitPrice', il.unit_price::text, 'amount', il.amount::text) ORDER BY l.lot_number)
   FROM invoice_lines il JOIN auction_lots l ON l.id = il.lot_id WHERE il.invoice_id = i.id), '[]') AS lines`;

@@ -48,6 +48,9 @@ SESSION_SECRET=$(r)
 # Audit log copy to write-once storage (bucket must have S3 Object Lock enabled; AWS credentials from the usual chain).
 # AUDIT_SHIP_BUCKET=telus-audit-prod
 # AUDIT_SHIP_REGION=me-central-1
+# Card payments (Stripe Checkout): from the Stripe dashboard. Unset = no card payment button.
+# STRIPE_SECRET_KEY=rk_live_...
+# STRIPE_WEBHOOK_SECRET=whsec_...
 PUBLIC_WEB_URL=http://localhost:3000
 ENVEOF
 chmod 600 .env

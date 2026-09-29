@@ -345,10 +345,36 @@ finance settles one — and saves numbered screenshots plus each bidder's browse
   lock (e.g. the Object Lock bucket, a separate prefix); run the drill at least monthly and after every schema change, and alert
   if it fails or has not run.
 
+## Card payments (step 15)
+Winners' customer administrators can pay an unpaid invoice by card on **Stripe Checkout** (hosted page; card data never
+reaches TELUS systems — PCI scope SAQ A). Bank transfer settled by finance keeps working as before.
+- **Start** — `POST /invoices/:id/pay` (customer admin only): the API reads the invoice under RLS, asks Stripe for a Checkout
+  session for the exact total in fils (AED), records a `payments` row and returns the URL; the web app redirects there (only
+  to `https://checkout.stripe.com/`). The database policy re-checks: own company, invoice unpaid, amount = invoice total.
+- **Finish** — only Stripe's signed webhook `POST /payments/stripe/webhook` (signature over the raw body; forgeries → 400).
+  `payment_succeeded()` settles the invoice once, for exactly the invoice amount in AED, and audits it
+  (`invoice.paid_by_card`); a redelivered webhook is a no-op; a wrong amount/currency or an already settled invoice is
+  **not applied** — recorded as `rejected` with the reason and shown to finance on the invoice (refund or apply manually).
+  Expired/failed checkouts never touch the invoice.
+- **Set up** — Stripe account in AED; `STRIPE_SECRET_KEY` (a restricted key with Checkout Sessions write is enough) and
+  `STRIPE_WEBHOOK_SECRET` from a webhook endpoint `https://<api-host>/payments/stripe/webhook` subscribed to
+  `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`,
+  `checkout.session.expired`; `PUBLIC_WEB_URL` for the return pages. Without the keys the button is not shown.
+- **Tested** — `payments.e2e.spec` (real Postgres, Stripe API stand-in, Stripe's own signing): role, exact fils, idempotency,
+  another company's invoice, forged/missing signature, wrong amount, settle once + redelivery, expiry, database refusals;
+  Playwright: button → provider page → signed confirmation → invoice paid.
+- **Not built** — refunds and partial payments (handled in the Stripe dashboard + finance), payment receipts by email.
+
+## Decisions recorded
+- Purchase limits do **not** count unpaid invoices (owner's decision, 2026-09-29) — gap 7 is by design.
+- Suspending a customer company stops its bids at once but does **not** sign its users out (owner's decision, 2026-09-29) —
+  gap 6 is by design; suspend individual logins to end their sessions.
+- Hosting: **AWS**. Payments: **card online** (Stripe Checkout), bank transfer kept.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 168/168 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 176/176 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
-Admin API; web 26 unit tests and 12 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
+Admin API; web 26 unit tests and 13 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
 checked to fail when the protection they cover is removed, as was the web refresh-lock test. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
@@ -430,7 +456,7 @@ through `docker compose exec`; the same admin operations were verified via the R
 10. Rate-limit checks fail open while Redis is unreachable (by design, logged). The web app has no rate limiting of its own.
    Requests with an invalid token are refused (401) before they are counted, so floods of them must be absorbed at the edge
    (proxy / WAF); the API only spends a signature check on each.
-11. Not built yet: credential vault for external-platform passwords, payments port, third-party penetration test.
+11. Not built yet: credential vault for external-platform passwords, third-party penetration test.
 
 ## Roadmap — what remains, in order
 **Phase A — merge and stand up a staging environment**
@@ -442,14 +468,13 @@ through `docker compose exec`; the same admin operations were verified via the R
 5. Run `docker-compose.yml` / `create-user.sh` once for real (never run here), create the first staff users with MFA.
 
 **Phase B — business decisions that change code** (need the owner's answers)
-6. Purchase limits: should unpaid invoices count against a customer's limit (gap 7)?
+6. ~~Purchase limits vs unpaid invoices~~ — decided: not counted.
 7. Margin brackets: freeze them per auction at scheduling time (gap 8)?
 8. Invitations: switch to `TEAM_INVITE_METHOD=email` once SMTP works (gap 9); SMS notifications wanted?
-9. Suspending a customer: also end all its users' sessions automatically (gap 6)?
+9. ~~Suspending a customer ends sessions~~ — decided: no.
 
 **Phase C — features not built yet** (need provider / scope decisions)
-10. Payments: choose the provider (card gateway, bank transfer reconciliation, or both); invoices already carry status and
-    settlement fields.
+10. ~~Card payments~~ — done with Stripe Checkout (step 15); open a Stripe account in AED and configure the webhook.
 11. Credential vault for external-platform passwords: which platforms, who may see them, which vault (e.g. cloud KMS-backed).
 12. ~~Enforce MFA for staff~~ — done (step 12).
 

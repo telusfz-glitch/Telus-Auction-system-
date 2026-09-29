@@ -1,5 +1,5 @@
 import { defineConfig } from '@playwright/test';
-import { STACK } from './e2e/stack';
+import { STACK, STRIPE } from './e2e/stack';
 
 /**
  * Full-stack end-to-end tests: real Keycloak, Postgres, Redis, the API and the production build of this app.
@@ -39,6 +39,9 @@ export default defineConfig({
         KEYCLOAK_ADMIN_CLIENT_SECRET: STACK.apiAdminSecret,
         // Production default: new team logins must choose a password AND enrol an authenticator (the test computes TOTP codes).
         TEAM_USER_REQUIRED_ACTIONS: 'UPDATE_PASSWORD,CONFIGURE_TOTP',
+        // Card payments against a local Stripe stand-in (e2e/global-setup.ts); webhooks are signed by the test.
+        STRIPE_SECRET_KEY: STRIPE.secretKey, STRIPE_WEBHOOK_SECRET: STRIPE.webhookSecret,
+        STRIPE_API_URL: `http://127.0.0.1:${STRIPE.apiPort}`, PUBLIC_WEB_URL: STACK.webUrl,
       },
     },
     {

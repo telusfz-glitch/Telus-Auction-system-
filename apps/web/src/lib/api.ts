@@ -15,7 +15,7 @@ export class ApiCallError extends Error {
 export const STEP_UP_COOKIE = 'telus_stepup';
 
 // Server errors whose API message is written for users (no internals) and tells them what to do.
-const SAFE_5XX = new Set(['INVITE_EMAIL_FAILED']);
+const SAFE_5XX = new Set(['INVITE_EMAIL_FAILED', 'PAYMENTS_DISABLED', 'PAYMENT_PROVIDER_UNAVAILABLE']);
 
 export async function api<T>(session: Session, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const res = await fetch(`${env().API_URL}${path}`, {

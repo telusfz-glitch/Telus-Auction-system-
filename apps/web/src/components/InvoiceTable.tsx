@@ -1,3 +1,4 @@
+import { payInvoiceAction } from '@/app/actions/payments';
 import { settleInvoiceAction } from '@/app/actions/team';
 import { ActionForm } from '@/components/ActionForm';
 import { aed, when } from '@/lib/format';
@@ -5,7 +6,9 @@ import type { Invoice } from '@/lib/types';
 
 const STATUS_CLASS = { unpaid: 'scheduled', paid: 'live', void: 'cancelled' } as const;
 
-export function InvoiceTable({ invoices, tz, showCustomer, canSettle }: { invoices: Invoice[]; tz: string; showCustomer: boolean; canSettle: boolean }) {
+export function InvoiceTable({ invoices, tz, showCustomer, canSettle, canPay = false }: {
+  invoices: Invoice[]; tz: string; showCustomer: boolean; canSettle: boolean; canPay?: boolean;
+}) {
   if (invoices.length === 0) return <p className="panel">No invoices.</p>;
   return (
     <>
@@ -29,6 +32,17 @@ export function InvoiceTable({ invoices, tz, showCustomer, canSettle }: { invoic
                 <td className="num">{aed(l.unitPrice)}</td><td className="num">{aed(l.amount)}</td></tr>
             ))}</tbody>
           </table>
+          {i.last_payment?.status === 'rejected' && (
+            <p className="msg err" data-testid="payment-rejected">
+              A card payment was received but not applied automatically ({i.last_payment.detail}). {canSettle ? 'Check the provider and refund or apply it.' : 'TELUS Finance will contact you.'}
+            </p>
+          )}
+          {canPay && i.status === 'unpaid' && i.last_payment?.status !== 'rejected' && (
+            <div className="row" style={{ marginTop: 10 }}>
+              <ActionForm action={payInvoiceAction} submit="Pay by card" hidden={{ invoiceId: i.id }} />
+              <span className="muted">Secure payment page by Stripe. Card details never pass through TELUS.</span>
+            </div>
+          )}
           {canSettle && i.status === 'unpaid' && (
             <div className="row" style={{ marginTop: 10 }}>
               <ActionForm action={settleInvoiceAction} submit="Mark paid" hidden={{ invoiceId: i.id, status: 'paid' }}>

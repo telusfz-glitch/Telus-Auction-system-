@@ -14,3 +14,7 @@ regexes = ['''^eyJhbGciOiJSUzI1NiIs$''', '''^eyJhbGciOiJub25lIn0\.e30\.$''']
 [[allowlists]]
 description = "Environment-variable lookups, not values"
 regexes = ['''^e\.E2E_[A-Z_]+$''']
+
+[[allowlists]]
+description = "Stripe-shaped test fixtures (exact placeholder values with the 0123456789 run; real test or live keys still reported)"
+regexes = ['''^(sk|rk)_test_(e2e_)?0123456789$''', '''^whsec_(test|e2e)_0123456789abcdefghijklmnopqrstuv(wx)?$''']

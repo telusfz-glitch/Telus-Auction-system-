@@ -31,6 +31,10 @@ const EnvSchema = z.object({
   // link (needs the realm's SMTP settings). Links expire after TEAM_INVITE_LIFESPAN_SECONDS.
   TEAM_INVITE_METHOD: z.enum(['password', 'email']).default('password'),
   TEAM_INVITE_LIFESPAN_SECONDS: z.coerce.number().int().min(300).max(7 * 86400).default(86400),
+  // Card payments (Stripe Checkout, hosted page). Both set ⇒ enabled; otherwise card payment answers 503.
+  STRIPE_SECRET_KEY: z.string().regex(/^(sk|rk)_(test|live)_/).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().regex(/^whsec_/).optional(),
+  STRIPE_API_URL: z.string().url().optional(),   // tests only: a local stand-in for api.stripe.com
   // Prometheus scrape token for GET /metrics (sent as a bearer token). Unset ⇒ /metrics answers 404.
   METRICS_TOKEN: z.string().min(32).optional(),
   // Rate limits shared by all instances when set (falls back to REDIS_URL, then to in-memory).

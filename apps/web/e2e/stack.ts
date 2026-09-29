@@ -17,6 +17,9 @@ export const STACK = {
   apiAdminSecret: e.E2E_API_ADMIN_CLIENT_SECRET ?? 'e2e-api-admin-secret-0123456789',
 };
 
+/** Card payments: a local stand-in for api.stripe.com (started by global-setup) and the webhook signing secret. */
+export const STRIPE = { apiPort: 4199, webhookSecret: 'whsec_e2e_0123456789abcdefghijklmnopqrstuv', secretKey: 'sk_test_e2e_0123456789' };
+
 /** Logins the tests create through the app itself (removed from Keycloak before each run). */
 export const CREATED_IN_TEST = ['newbidder@alpha.test'];
 

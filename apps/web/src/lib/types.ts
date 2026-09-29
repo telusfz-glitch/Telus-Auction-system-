@@ -40,5 +40,6 @@ export interface Invoice {
   id: string; invoice_number: string; customer_id: string; total_amount: string; status: 'unpaid' | 'paid' | 'void';
   created_at: string; settled_at: string | null; settlement_note: string | null; auction_number: string | null; auction_name: string | null;
   customer_code: string; company_name: string;
+  last_payment: { status: 'created' | 'succeeded' | 'expired' | 'failed' | 'rejected'; detail: string | null; at: string } | null;
   lines: Array<{ lotNumber: string; description: string; quantity: number; unitPrice: string; amount: string }>;
 }

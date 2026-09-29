@@ -2,8 +2,9 @@ import { expect, test, type Browser, type BrowserContext, type Page } from '@pla
 import ExcelJS from 'exceljs';
 import { Pool } from 'pg';
 import { createClient } from 'redis';
+import { createHmac } from 'crypto';
 import { keyOf, seal, unseal } from '../src/lib/crypto';
-import { PASSWORD, STACK, USERS } from './stack';
+import { CUSTOMER, PASSWORD, STACK, STRIPE, USERS } from './stack';
 import { keycloakLogin } from './login';
 import { freshCode, totp } from './totp';
 
@@ -278,6 +279,46 @@ test('invoices: the winner sees theirs; only finance can settle it', async ({ br
   await expect(inv).toContainText('paid');
   await expect(inv).toContainText('TT-2026-0042');
   for (const u of [alpha, mgr, fin]) await u.ctx.close();
+});
+
+test('card payment: the customer admin pays on the provider\'s page; the signed confirmation settles the invoice', async ({ browser }) => {
+  // A second, unpaid invoice for Alpha (manual invoice, as finance could raise).
+  const db = new Pool({ connectionString: STACK.dbAdminUrl });
+  const staff = async (sql: string, args: unknown[] = []) => {
+    const c = await db.connect();
+    try {
+      await c.query('BEGIN'); await c.query("SELECT set_config('app.role','staff',true), set_config('app.user_sub','e2e-seed',true)");
+      const r = await c.query(sql, args); await c.query('COMMIT'); return r.rows;
+    } finally { c.release(); }
+  };
+  await staff(`INSERT INTO invoices (invoice_number, customer_id, total_amount) VALUES ('INV-E2E-CARD', $1, 250.00)`, [CUSTOMER.alpha.id]);
+
+  const alpha = await newUser(browser, 'alphaAdmin');
+  // The provider's checkout page is outside this test environment: stand in for it.
+  await alpha.page.route('https://checkout.stripe.com/**', (r) => r.fulfill({ contentType: 'text/html', body: '<h1>Stripe Checkout (test)</h1>' }));
+  await alpha.page.getByRole('link', { name: 'Invoices' }).click();
+  const inv = alpha.page.getByTestId('invoice-INV-E2E-CARD');
+  await inv.getByRole('button', { name: 'Pay by card' }).click();
+  await alpha.page.waitForURL(/^https:\/\/checkout\.stripe\.com\/c\/pay\/cs_test_e2e_/);
+  const sessionId = new URL(alpha.page.url()).pathname.split('/').pop()!;
+
+  // The provider confirms: a webhook signed exactly as Stripe signs (HMAC-SHA256 over "timestamp.payload").
+  const payload = JSON.stringify({ id: 'evt_e2e_card', object: 'event', type: 'checkout.session.completed', created: Math.floor(Date.now() / 1000),
+    data: { object: { id: sessionId, object: 'checkout.session', payment_status: 'paid', amount_total: 25000, currency: 'aed', payment_intent: 'pi_e2e_card' } } });
+  const t = Math.floor(Date.now() / 1000);
+  const v1 = createHmac('sha256', STRIPE.webhookSecret).update(`${t}.${payload}`).digest('hex');
+  const res = await fetch(`${STACK.apiUrl}/payments/stripe/webhook`, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': `t=${t},v1=${v1}` }, body: payload });
+  expect(await res.json()).toMatchObject({ result: 'settled' });
+
+  // Back from the provider: the success page, and the invoice is paid.
+  await alpha.page.unroute('https://checkout.stripe.com/**');
+  await alpha.page.goto('/invoices?payment=success');
+  await expect(alpha.page.getByTestId('payment-banner')).toContainText('being confirmed');
+  await expect(inv).toContainText('paid');
+  await expect(inv).toContainText('Card payment pi_e2e_card');
+  await expect(inv.getByRole('button', { name: 'Pay by card' })).toHaveCount(0);
+  await db.end();
+  await alpha.ctx.close();
 });
 
 test('team: a customer admin creates a login; the new person must set a password and enrol an authenticator; suspension blocks sign-in', async ({ browser }) => {
