@@ -14,7 +14,10 @@
     "test:backup": "REQUIRE_BACKUP_TESTS=1 jest --runInBand test/backup.spec.ts",
     "load": "ts-node -r tsconfig-paths/register test/load/bid-load.ts",
     "load:http": "ts-node -r tsconfig-paths/register test/load/http-load.ts",
-    "audit:verify": "ts-node -r tsconfig-paths/register src/audit/verify-cli.ts"
+    "audit:verify": "ts-node -r tsconfig-paths/register src/audit/verify-cli.ts",
+    "build": "tsc -p ../../packages/shared/tsconfig.build.json && tsc -p tsconfig.build.json",
+    "start:prod": "node dist/main.js",
+    "migrate:prod": "node dist/db/migrate.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1141.0",

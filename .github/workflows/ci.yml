@@ -131,3 +131,30 @@ jobs:
           name: playwright-traces
           path: apps/web/test-results
           retention-days: 7
+
+  images:
+    name: Container images — build and smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API, ops and web images
+        run: |
+          docker build -f apps/api/Dockerfile --target runtime -t telus-api:ci .
+          docker build -f apps/api/Dockerfile --target ops -t telus-ops:ci .
+          docker build -f apps/web/Dockerfile -t telus-web:ci .
+      - name: Smoke-test the images
+        run: |
+          # API: compiled code loads, the shared package resolves to its compiled JavaScript, runs as non-root.
+          docker run --rm telus-api:ci node -e "const s=require('@telus/shared'); if(!s.STAFF_ROLES) process.exit(1); require('./apps/api/dist/app.module'); console.log('api ok')"
+          test "$(docker run --rm telus-api:ci id -u)" != "0"
+          docker run --rm telus-api:ci ls apps/api/db/migrations | grep -q '001_init.sql'
+          # ops: pg_dump 16 and the scripts are present.
+          docker run --rm telus-ops:ci bash -c "pg_dump --version | grep -q ' 16\.' && test -x scripts/db/backup.sh && test -x scripts/db/restore-drill.sh && echo ops ok"
+          # web: the standalone server answers.
+          docker run -d --name web -p 3000:3000 -e WEB_URL=http://localhost:3000 -e OIDC_ISSUER=http://localhost:8080/realms/telus \
+            -e OIDC_CLIENT_ID=telus-web -e OIDC_CLIENT_SECRET=e2e-web-client-secret-0123456789 -e API_URL=http://localhost:4000 \
+            -e API_PUBLIC_URL=http://localhost:4000 -e REDIS_URL=redis://localhost:6379 -e SESSION_SECRET=e2e-session-secret-0123456789abcdef-0123456789 \
+            -e ALLOW_HTTP_FOR_LOCAL_TESTING=true telus-web:ci
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 1; done
+          curl -sf -o /dev/null -w "web %{http_code}\n" http://localhost:3000/
+          docker logs web | tail -5

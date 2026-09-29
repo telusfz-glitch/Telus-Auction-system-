@@ -1,7 +1,11 @@
 import type { NextConfig } from 'next';
+import { join } from 'path';
 
 const config: NextConfig = {
   poweredByHeader: false,
+  // Docker builds set NEXT_OUTPUT=standalone: a minimal server bundle (node .next/standalone/apps/web/server.js).
+  output: process.env.NEXT_OUTPUT === 'standalone' ? 'standalone' : undefined,
+  outputFileTracingRoot: process.env.NEXT_OUTPUT === 'standalone' ? join(__dirname, '../..') : undefined,
   reactStrictMode: true,
   // @telus/shared is TypeScript source inside the monorepo.
   transpilePackages: ['@telus/shared'],
