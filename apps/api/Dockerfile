@@ -23,6 +23,8 @@ COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts --workspace=@telus/api --include-workspace-root
+# npm nests a package under apps/api/node_modules when its version conflicts with the root copy (today: nodemailer).
+RUN mkdir -p apps/api/node_modules
 
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production
@@ -35,6 +37,7 @@ COPY --from=build /repo/packages/shared/package.json ./packages/shared/package.j
 RUN sed -i 's#"main": "src/index.ts"#"main": "dist/index.js"#; s#"types": "src/index.ts"#"types": "dist/index.d.ts"#' packages/shared/package.json \
  && rm -rf node_modules/@telus && mkdir -p node_modules/@telus && ln -s ../../packages/shared node_modules/@telus/shared
 COPY --from=build /repo/apps/api/package.json ./apps/api/package.json
+COPY --from=deps --chown=root:root /repo/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build /repo/apps/api/dist ./apps/api/dist
 COPY --from=build /repo/apps/api/db ./apps/api/db
 # Amazon RDS certificate authorities: DATABASE_URL uses sslmode=verify-full&sslrootcert=/app/rds-ca.pem in AWS.
