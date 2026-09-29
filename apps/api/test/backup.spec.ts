@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import type { Pool } from 'pg';
@@ -81,6 +81,20 @@ const run = (script: string, args: string[], env: Record<string, string>) => {
     expect(d.out).toMatch(/FAIL {2}audit hash chain intact/);
     expect(d.out).toContain('RESTORE DRILL FAILED');
     expect(d.code).toBe(1);
+  });
+
+  (process.env.TEST_S3_ENDPOINT ? it : it.skip)('with BACKUP_S3_URI the dump and its checksum go off-site and the local copies are removed', async () => {
+    const { S3Client, CreateBucketCommand, ListObjectsV2Command } = await import('@aws-sdk/client-s3');
+    const aws = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test', AWS_REGION: 'us-east-1', AWS_ENDPOINT_URL_S3: process.env.TEST_S3_ENDPOINT!,
+      S3_FORCE_PATH_STYLE: '1', BACKUP_S3_SSE: 'AES256' };
+    const s3 = new S3Client({ region: 'us-east-1', endpoint: process.env.TEST_S3_ENDPOINT, forcePathStyle: true, credentials: { accessKeyId: 'test', secretAccessKey: 'test' } });
+    const bucket = `telus-backups-${Date.now()}`;
+    await s3.send(new CreateBucketCommand({ Bucket: bucket, ObjectLockEnabledForBucket: true }));
+    const b = run('backup.sh', [dir], { BACKUP_DB_URL: BACKUP_URL!, BACKUP_S3_URI: `s3://${bucket}/daily/`, ...aws });
+    expect(b.code).toBe(0);
+    const keys = ((await s3.send(new ListObjectsV2Command({ Bucket: bucket }))).Contents ?? []).map((o) => o.Key).sort();
+    expect(keys).toEqual([expect.stringMatching(/^daily\/telus-\d{8}T\d{6}Z\.dump$/), expect.stringMatching(/\.dump\.sha256$/)]);
+    expect(existsSync(b.out.trim())).toBe(false);
   });
 
   it('dumping as any role without BYPASSRLS is refused (FORCE row-level security would hide rows)', () => {

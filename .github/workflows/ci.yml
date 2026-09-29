@@ -142,6 +142,7 @@ jobs:
           docker build -f apps/api/Dockerfile --target runtime -t telus-api:ci .
           docker build -f apps/api/Dockerfile --target ops -t telus-ops:ci .
           docker build -f apps/web/Dockerfile -t telus-web:ci .
+          docker build -f infra/keycloak/Dockerfile -t telus-keycloak:ci .
       - name: Smoke-test the images
         run: |
           # API: compiled code loads, the shared package resolves to its compiled JavaScript, runs as non-root.
@@ -149,6 +150,8 @@ jobs:
           test "$(docker run --rm telus-api:ci id -u)" != "0"
           docker run --rm telus-api:ci ls apps/api/db/migrations | grep -q '001_init.sql'
           # ops: pg_dump 16 and the scripts are present.
+          docker run --rm --entrypoint ls telus-keycloak:ci /opt/keycloak/data/import/telus-realm.json
+          docker run --rm telus-ops:ci bash -c "test -x scripts/db/bootstrap-roles.sh && test -f scripts/db/s3-put.js && node -e \"require('@aws-sdk/client-s3')\"" 
           docker run --rm telus-ops:ci bash -c "pg_dump --version | grep -q ' 16\.' && test -x scripts/db/backup.sh && test -x scripts/db/restore-drill.sh && echo ops ok"
           # web: the standalone server answers.
           docker run -d --name web -p 3000:3000 -e WEB_URL=http://localhost:3000 -e OIDC_ISSUER=http://localhost:8080/realms/telus \
@@ -158,3 +161,25 @@ jobs:
           for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 1; done
           curl -sf -o /dev/null -w "web %{http_code}\n" http://localhost:3000/
           docker logs web | tail -5
+
+  terraform:
+    name: AWS infrastructure — fmt, validate, plan tests, Checkov
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      # Plans staging and production against a mocked AWS provider: no credentials, nothing created.
+      - run: terraform test
+      - name: Checkov (every skip carries its reason in the code)
+        run: |
+          python3 -m venv /tmp/ck && /tmp/ck/bin/pip install -q checkov==3.3.20
+          /tmp/ck/bin/checkov -d . --framework terraform --quiet --compact

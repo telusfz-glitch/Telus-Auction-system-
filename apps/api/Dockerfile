@@ -37,6 +37,8 @@ RUN sed -i 's#"main": "src/index.ts"#"main": "dist/index.js"#; s#"types": "src/i
 COPY --from=build /repo/apps/api/package.json ./apps/api/package.json
 COPY --from=build /repo/apps/api/dist ./apps/api/dist
 COPY --from=build /repo/apps/api/db ./apps/api/db
+# Amazon RDS certificate authorities: DATABASE_URL uses sslmode=verify-full&sslrootcert=/app/rds-ca.pem in AWS.
+ADD --chmod=644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/rds-ca.pem
 USER node
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"

@@ -365,6 +365,21 @@ reaches TELUS systems — PCI scope SAQ A). Bank transfer settled by finance kee
   Playwright: button → provider page → signed confirmation → invoice paid.
 - **Not built** — refunds and partial payments (handled in the Stripe dashboard + finance), payment receipts by email.
 
+## AWS deployment (step 16)
+Container images and infrastructure-as-code for staging and production — full guide in [`infra/aws/README.md`](infra/aws/README.md).
+- **Images** (built and smoke-tested in CI): `apps/api/Dockerfile` (`runtime` = API, `ops` = migrations/backups/role bootstrap with
+  the PostgreSQL 16 client), `apps/web/Dockerfile` (Next.js standalone), `infra/keycloak/Dockerfile` (production `kc start`, realm
+  imported on first start). All run as non-root; the API and Keycloak images carry the Amazon RDS CA bundle and verify the
+  database certificate (`sslmode=verify-full`).
+- **Terraform** (`infra/aws`, region me-central-1 / UAE): VPC with private data tier, ALB + WAF, ECS Fargate services, RDS
+  PostgreSQL 16, ElastiCache Redis 7 (TLS), S3 Object Lock buckets for the audit trail and backups, Secrets Manager, KMS, scheduled
+  backup and audit-verify jobs, alarms by e-mail. Checked in CI with `fmt`, `validate`, `terraform test` (both environments planned
+  against a mocked provider) and Checkov (0 failed; each skip has its reason inline).
+- **Database roles on a managed server:** `scripts/db/bootstrap-roles.sh` (run once as an ECS task) creates a **non-superuser**
+  owner `telus_owner`, the runtime `telus_app`, `telus_backup` and `keycloak`; migrations were verified to apply as that
+  non-superuser owner (closes gap 4). `backup.sh` uploads to S3 when `BACKUP_S3_URI` is set.
+- Not yet done: a real `terraform apply` in an AWS account (needs the account, a domain and a certificate).
+
 ## Decisions recorded
 - Purchase limits do **not** count unpaid invoices (owner's decision, 2026-09-29) — gap 7 is by design.
 - Suspending a customer company stops its bids at once but does **not** sign its users out (owner's decision, 2026-09-29) —
@@ -436,9 +451,11 @@ through `docker compose exec`; the same admin operations were verified via the R
    role (enrolment is forced on first login), and the API refuses any staff token whose `amr` lacks `otp` (`STAFF_MFA_AMR`).
    Customers are asked for a code when they have enrolled one (team logins always do); making it mandatory for *every* customer
    login is a business choice — add the customer roles to the flow's condition if wanted.
-3. `sslRequired: external` and `start-dev` are **dev settings**. Production: `sslRequired: all`, `kc start` behind TLS with a real
-   hostname, `https` issuer (the API already refuses a non-https issuer when `NODE_ENV=production`).
-4. Migrations here run as a superuser (`telus_owner` in the dev image). Production should use a separate non-superuser owner role.
+3. `start-dev` is a **dev setting**. The AWS image runs `kc start` behind the TLS load balancer with an `https` hostname (step 16);
+   the API refuses a non-https issuer when `NODE_ENV=production`. The realm keeps `sslRequired: external`, which behind the ALB
+   means every public client must use HTTPS; set it to `all` in the admin console if wanted.
+4. ~~Migrations run as a superuser~~ — closed (step 16): on AWS, `bootstrap-roles.sh` creates a non-superuser `telus_owner` and
+   migrations were verified to apply as it. (The local `docker-compose` image still uses a superuser for convenience.)
 5. The audit chain alone stops tampering by application code and by the owner *unless they drop the triggers*; shipping to
    S3 Object Lock (step 11) closes that for everything shipped. Rows written since the last shipment (≤ `AUDIT_SHIP_INTERVAL_MS`)
    are protected only by the chain, and the `ip` column is not part of the hash (it is protected once shipped). Shipping is
@@ -461,11 +478,12 @@ through `docker compose exec`; the same admin operations were verified via the R
 ## Roadmap — what remains, in order
 **Phase A — merge and stand up a staging environment**
 1. Review and merge PR #1 (`claude/project-start-continue-8mn8ww` → `main`).
-2. Provision staging: managed PostgreSQL 16 (non-superuser owner role, gap 4), Redis 7, Keycloak ≥ 26.2 in production mode
-   (`kc start`, TLS, `sslRequired: all`, gap 3), the API (2+ instances behind a TLS load balancer) and the web app.
-3. Generate secrets with `scripts/gen-secrets.sh` into a secrets manager; set `SMTP_URL`, `MAIL_FROM`, `PUBLIC_WEB_URL`.
-4. Create the S3 Object Lock bucket, set `AUDIT_SHIP_BUCKET`, schedule `npm run audit:verify` from a separate account with alerting.
-5. Run `docker-compose.yml` / `create-user.sh` once for real (never run here), create the first staff users with MFA.
+2. ~~Write the AWS infrastructure~~ — done (step 16): images, Terraform, secrets, Object Lock buckets, scheduled backup and
+   audit-verify, alarms.
+3. **You:** an AWS account, the domain names and an ACM certificate; then follow `infra/aws/README.md` (≈12 steps) to bring up
+   staging. Fill the `external` secret with Stripe (test mode first) and SMTP credentials.
+4. Create the first staff users with MFA (step 12 of that guide); run one restore drill against staging.
+5. Optional: run `docker-compose.yml` / `create-user.sh` once for real for local development (never run here).
 
 **Phase B — business decisions that change code** (need the owner's answers)
 6. ~~Purchase limits vs unpaid invoices~~ — decided: not counted.
@@ -481,6 +499,6 @@ through `docker compose exec`; the same admin operations were verified via the R
 **Phase D — prove it before go-live**
 13. `npm run load:http` on production-like hardware, load generator on separate machines.
 14. Third-party penetration test; fix findings.
-15. Schedule `scripts/db/backup.sh` + a monthly `restore-drill.sh` (both exist — step 14); wire `/health/ready` into the load
-    balancer and `/metrics` into Prometheus with the alerts in "Operations" (step 13).
+15. ~~Schedule backups, wire health checks~~ — done on AWS (step 16): nightly backup task, `/health/ready` as the ALB health
+    check, alarms by e-mail. Still to do: a monthly `restore-drill.sh`, and scraping `/metrics` (Prometheus or CloudWatch agent).
 16. A pilot auction with one or two friendly customers, then go live.
