@@ -101,6 +101,25 @@ database `telus_e2e_test`; Redis on :6380 with password `testpw`. These are test
 | Customer moving themselves to another tenant | `customer_id` is a declared user-profile attribute that only admins can view or edit | realm import + web `e2e` setup |
 
 
+## Why PostgreSQL (and not MySQL or MongoDB)
+Decided and kept deliberately. The platform's guarantees are enforced **by the database itself**, and they rely on PostgreSQL
+features (counts from `apps/api/db/migrations`):
+
+| Feature | Used | What it guarantees | MySQL | MongoDB |
+|---|---|---|---|---|
+| Row-level security (47 policies, 14 tables FORCE'd) | tenancy | one company can never read another's bids, invoices or logins — even with an app bug | none | none |
+| Triggers (15) | immutability | invoices, lot results, audit log, running auctions cannot be altered or deleted | weaker | cannot veto a write |
+| Functions (40, SECURITY DEFINER) | lifecycle | closing, email queue, audit export run inside the DB with `require_system()` | weaker | none |
+| Advisory locks (18) | bidding | concurrent bids on a lot are serialised; a closing auction excludes late bids | limited | none |
+| `FOR UPDATE SKIP LOCKED` (9) | queues | several API instances share the outbox / email queue without double-sending | yes | none |
+| Foreign keys (22), CHECK constraints (54) | integrity | no orphan bids, no negative prices, valid states only | yes | none / partial |
+| `numeric` money (16 columns) | money | exact to the cent | yes | weaker |
+| `jsonb` (26 uses) | flexibility | event payloads and audit before/after values — document-style data without a second database | weaker | native |
+
+MySQL would lose row-level security (the core of tenant isolation) and weaken the locking/trigger design; MongoDB would move
+every one of these guarantees into application code. If a genuinely document-shaped, high-volume, non-transactional need
+appears later, use `jsonb` first; add another store only if that is measured to be insufficient.
+
 ## Bid engine (step 3) — how correctness is guaranteed
 Two layers, deliberately redundant:
 1. **Application engine** (`src/bids/bids.service.ts`) does the business rules and returns clean errors: eligibility (invited, active,
@@ -364,6 +383,29 @@ through `docker compose exec`; the same admin operations were verified via the R
    (proxy / WAF); the API only spends a signature check on each.
 11. Not built yet: credential vault for external-platform passwords, payments port, third-party penetration test.
 
-## Next
-10. Run `load:http` on production-like hardware (generator on separate machines) before a large event.
-11. Vault, payments, penetration test.
+## Roadmap — what remains, in order
+**Phase A — merge and stand up a staging environment**
+1. Review and merge PR #1 (`claude/project-start-continue-8mn8ww` → `main`).
+2. Provision staging: managed PostgreSQL 16 (non-superuser owner role, gap 4), Redis 7, Keycloak ≥ 26.2 in production mode
+   (`kc start`, TLS, `sslRequired: all`, gap 3), the API (2+ instances behind a TLS load balancer) and the web app.
+3. Generate secrets with `scripts/gen-secrets.sh` into a secrets manager; set `SMTP_URL`, `MAIL_FROM`, `PUBLIC_WEB_URL`.
+4. Create the S3 Object Lock bucket, set `AUDIT_SHIP_BUCKET`, schedule `npm run audit:verify` from a separate account with alerting.
+5. Run `docker-compose.yml` / `create-user.sh` once for real (never run here), create the first staff users with MFA.
+
+**Phase B — business decisions that change code** (need the owner's answers)
+6. Purchase limits: should unpaid invoices count against a customer's limit (gap 7)?
+7. Margin brackets: freeze them per auction at scheduling time (gap 8)?
+8. Invitations: switch to `TEAM_INVITE_METHOD=email` once SMTP works (gap 9); SMS notifications wanted?
+9. Suspending a customer: also end all its users' sessions automatically (gap 6)?
+
+**Phase C — features not built yet** (need provider / scope decisions)
+10. Payments: choose the provider (card gateway, bank transfer reconciliation, or both); invoices already carry status and
+    settlement fields.
+11. Credential vault for external-platform passwords: which platforms, who may see them, which vault (e.g. cloud KMS-backed).
+12. Enforce MFA at the API too (check `acr`/`amr`, gap 2) and add a conditional-OTP flow in Keycloak for staff.
+
+**Phase D — prove it before go-live**
+13. `npm run load:http` on production-like hardware, load generator on separate machines.
+14. Third-party penetration test; fix findings.
+15. Backups + restore drill for PostgreSQL; monitoring and alerts (API errors, outbox backlog, email failures, audit shipping lag).
+16. A pilot auction with one or two friendly customers, then go live.
