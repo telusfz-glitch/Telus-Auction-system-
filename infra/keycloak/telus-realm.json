@@ -36,23 +36,53 @@
     "realm": [
       {
         "name": "super_admin",
-        "description": "Full staff access"
+        "description": "Full staff access",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
       },
       {
         "name": "auction_manager",
-        "description": "Create/manage auctions and customers"
+        "description": "Create/manage auctions and customers",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
       },
       {
         "name": "sales_manager",
-        "description": "View customers, results, reports"
+        "description": "View customers, results, reports",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
       },
       {
         "name": "finance",
-        "description": "Deposits, invoices, payments"
+        "description": "Deposits, invoices, payments",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
       },
       {
         "name": "view_only",
-        "description": "Read-only staff"
+        "description": "Read-only staff",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
       },
       {
         "name": "customer_admin",
@@ -68,6 +98,10 @@
         "name": "customer_viewer",
         "description": "Customer team member, read-only",
         "id": "c0570000-0000-4000-8000-0000000000c1"
+      },
+      {
+        "name": "staff_mfa",
+        "description": "Marker included in every staff role: the login flow requires an authenticator app (TOTP) for anyone holding it. Never assign directly."
       }
     ]
   },
@@ -113,6 +147,16 @@
             "jsonType.label": "String",
             "id.token.claim": "false",
             "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "amr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-amr-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
           }
         }
       ],
@@ -570,5 +614,166 @@
       },
       "subGroups": []
     }
-  ]
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "telus browser",
+      "description": "Browser login: password, then an authenticator code — always for staff, and for customers who enrolled one.",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "autheticatorFlow": true,
+          "flowAlias": "telus browser forms",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "telus browser forms",
+      "description": "Username/password, then the OTP rules",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-amr-pwd"
+        },
+        {
+          "authenticatorFlow": true,
+          "autheticatorFlow": true,
+          "flowAlias": "telus staff otp",
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "autheticatorFlow": true,
+          "flowAlias": "telus customer otp",
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "telus staff otp",
+      "description": "Staff (any role including staff_mfa): OTP required; enrolment is forced if none is configured",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-cond-staff"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-amr-otp-staff"
+        }
+      ]
+    },
+    {
+      "alias": "telus customer otp",
+      "description": "Customers: OTP when they have enrolled one (team logins are created with CONFIGURE_TOTP)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-configured",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-cond-not-staff"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 30,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-amr-otp-customer"
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "telus-amr-pwd",
+      "config": {
+        "default.reference.value": "pwd",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "telus-amr-otp-staff",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "telus-amr-otp-customer",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "telus-cond-staff",
+      "config": {
+        "condUserRole": "staff_mfa",
+        "negate": "false"
+      }
+    },
+    {
+      "alias": "telus-cond-not-staff",
+      "config": {
+        "condUserRole": "staff_mfa",
+        "negate": "true"
+      }
+    }
+  ],
+  "browserFlow": "telus browser"
 }

@@ -83,6 +83,14 @@ const soon = (s: number) => new Date(Date.now() + s * 1000).toISOString();
     expect(res.status).toBe(403);
   });
 
+  it('a staff token without a second factor is refused with MFA_REQUIRED (the web app re-runs the login)', async () => {
+    const { amr: _amr, ...pwdOnly } = staffClaims('super_admin');
+    const t = await signToken(priv, { ...pwdOnly, amr: ['pwd'] }, { sub: 'staff-no-otp' });
+    const res = await http().get('/admin/auctions').set('Authorization', `Bearer ${t}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'MFA_REQUIRED' });
+  });
+
   it('every staff role can read; validation rejects unknown fields (mass assignment) and bad values', async () => {
     for (const who of ['viewer', 'finance', 'sales', 'manager', 'super']) await as(who).get('/admin/auctions').expect(200);
     const smuggle = await mgr().post('/admin/auctions', { number: 'A-1', name: 'X', startAt: soon(60), closeAt: soon(120), status: 'live' });

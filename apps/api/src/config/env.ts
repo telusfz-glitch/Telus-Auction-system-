@@ -3,6 +3,8 @@ import { z } from 'zod';
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+  // Staff tokens must show one of these authentication methods (token `amr` claim). Empty = no check (never in production).
+  STAFF_MFA_AMR: z.string().default('otp'),
   // Connections per API instance. Keep instances × DB_POOL_MAX below Postgres max_connections.
   DB_POOL_MAX: z.coerce.number().int().min(2).max(500).default(20),
   DATABASE_URL: z.string().url(),

@@ -33,4 +33,11 @@ export const USERS = {
   alphaViewer: { email: 'viewer@alpha.test', role: 'customer_viewer', customerId: CUSTOMER.alpha.id, first: 'Amal', last: 'Alpha' },
   betaBidder: { email: 'bidder@beta.test', role: 'customer_bidder', customerId: CUSTOMER.beta.id, first: 'Bilal', last: 'Beta' },
   noRole: { email: 'norole@telus.test', role: null, first: 'Nora', last: 'Norole' },
+  // Staff with NO authenticator yet: the login flow must force enrolment before anything else.
+  newStaff: { email: 'newstaff@telus.test', role: 'view_only', first: 'Nina', last: 'Newstaff' },
 } as const;
+
+/** Staff must use an authenticator app. Seeded staff get this pre-provisioned TOTP secret (test fixture, raw bytes). */
+export const STAFF_ROLES_E2E = ['super_admin', 'auction_manager', 'sales_manager', 'finance', 'view_only'];
+export const STAFF_OTP_SECRET = 'e2e-staff-otp-secret-0123456789';
+export const NOT_PREENROLLED = ['newstaff@telus.test'];

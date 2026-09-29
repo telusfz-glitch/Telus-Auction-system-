@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { migrate } from '../../api/src/db/migrate';
-import { CREATED_IN_TEST, CUSTOMER, PASSWORD, STACK, USERS } from './stack';
+import { CREATED_IN_TEST, CUSTOMER, NOT_PREENROLLED, PASSWORD, STACK, STAFF_OTP_SECRET, STAFF_ROLES_E2E, USERS } from './stack';
 
 /** Fresh database + seed data, and real Keycloak users (created through the admin REST API, like create-user.sh). */
 export default async function globalSetup() {
@@ -57,7 +57,15 @@ export default async function globalSetup() {
       // No required actions here (production users must set a password + enrol TOTP; see create-user.sh).
       requiredActions: [],
       attributes: 'customerId' in u ? { customer_id: [u.customerId] } : {},
-      credentials: [{ type: 'password', value: PASSWORD, temporary: false }],
+      credentials: [
+        { type: 'password', value: PASSWORD, temporary: false },
+        // Staff must present an authenticator code (telus browser flow + API amr check): seed one, like an enrolled phone.
+        ...(u.role && STAFF_ROLES_E2E.includes(u.role) && !NOT_PREENROLLED.includes(u.email) ? [{
+          type: 'otp', userLabel: 'e2e authenticator',
+          secretData: JSON.stringify({ value: STAFF_OTP_SECRET }),
+          credentialData: JSON.stringify({ subType: 'totp', digits: 6, counter: 0, period: 30, algorithm: 'HmacSHA1' }),
+        }] : []),
+      ],
     }) });
     const [created] = await (await call(`/users?exact=true&username=${encodeURIComponent(u.email)}`)).json() as Array<{ id: string; attributes?: Record<string, string[]> }>;
     if ('customerId' in u && created?.attributes?.['customer_id']?.[0] !== u.customerId) {

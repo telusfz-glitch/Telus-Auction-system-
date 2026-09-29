@@ -297,10 +297,22 @@ browsers — staff build and open it, two companies bid against each other with 
 finance settles one — and saves numbered screenshots plus each bidder's browser video to `apps/web/demo-output/`
 (`DEMO_OUT` to change). It is skipped in normal test runs.
 
+## Staff MFA enforced by Keycloak and the API (step 12)
+- **Keycloak** (`infra/keycloak/telus-realm.json`): custom browser flow `telus browser`. Every staff role includes the marker role
+  `staff_mfa`; for anyone holding it the OTP form is required, and a staff user without an authenticator must enrol one before
+  the login completes. Customers keep the previous behaviour (asked when enrolled). The AMR protocol mapper writes the methods
+  used into the token (`amr: ["pwd","otp"]`).
+- **API**: a staff token without `otp` in `amr` is refused with `403 MFA_REQUIRED` — even a perfectly valid token from another
+  client or a changed flow never reaches staff endpoints on a password alone.
+- **Web**: enrolling is not using — the token issued right after enrolment has only `pwd`. On `MFA_REQUIRED` the app starts one
+  step-up login (`prompt=login`, guarded by a 60-second cookie against loops) and the user signs in with the new authenticator.
+- **Proven** in the e2e suite against real Keycloak: forced enrolment, the step-up, `amr` in the stored token, kept on refresh
+  and on a silent SSO re-login; seeded staff use pre-provisioned TOTP secrets and never reuse a code (single-use codes kept).
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 157/157 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 159/159 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
-Admin API; web 26 unit tests and 11 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
+Admin API; web 26 unit tests and 12 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
 checked to fail when the protection they cover is removed, as was the web refresh-lock test. Writing these suites found and fixed real bugs (audit-chain ordering under concurrent writes; a test-harness
 assumption about owner access under FORCE'd RLS).
@@ -358,9 +370,10 @@ through `docker compose exec`; the same admin operations were verified via the R
    out until an administrator removes the role. Protect `KEYCLOAK_ADMIN_CLIENT_SECRET` like the database password, and alert on
    admin events that map customer roles to users outside `customers`. (With Keycloak 26.0 the same account could grant
    `super_admin`; that is why the realm now requires ≥ 26.2 — see `docker-compose.yml`.)
-2. **MFA is not enforced by the API.** It relies on Keycloak: `create-user.sh` and the team endpoints set `CONFIGURE_TOTP` as a required
-   action, so users created that way enrol TOTP at first login. Users created any other way get no MFA unless you configure a
-   conditional-OTP flow in Keycloak. The API does not check `acr`/`amr`.
+2. **MFA for staff is enforced twice** (step 12): the realm's `telus browser` flow requires an authenticator for every staff
+   role (enrolment is forced on first login), and the API refuses any staff token whose `amr` lacks `otp` (`STAFF_MFA_AMR`).
+   Customers are asked for a code when they have enrolled one (team logins always do); making it mandatory for *every* customer
+   login is a business choice — add the customer roles to the flow's condition if wanted.
 3. `sslRequired: external` and `start-dev` are **dev settings**. Production: `sslRequired: all`, `kc start` behind TLS with a real
    hostname, `https` issuer (the API already refuses a non-https issuer when `NODE_ENV=production`).
 4. Migrations here run as a superuser (`telus_owner` in the dev image). Production should use a separate non-superuser owner role.
@@ -402,7 +415,7 @@ through `docker compose exec`; the same admin operations were verified via the R
 10. Payments: choose the provider (card gateway, bank transfer reconciliation, or both); invoices already carry status and
     settlement fields.
 11. Credential vault for external-platform passwords: which platforms, who may see them, which vault (e.g. cloud KMS-backed).
-12. Enforce MFA at the API too (check `acr`/`amr`, gap 2) and add a conditional-OTP flow in Keycloak for staff.
+12. ~~Enforce MFA for staff~~ — done (step 12).
 
 **Phase D — prove it before go-live**
 13. `npm run load:http` on production-like hardware, load generator on separate machines.

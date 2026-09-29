@@ -4,7 +4,8 @@ import { Pool } from 'pg';
 import { createClient } from 'redis';
 import { keyOf, seal, unseal } from '../src/lib/crypto';
 import { PASSWORD, STACK, USERS } from './stack';
-import { totp } from './totp';
+import { keycloakLogin } from './login';
+import { freshCode, totp } from './totp';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -26,10 +27,7 @@ async function newUser(browser: Browser, who: keyof typeof USERS): Promise<{ ctx
   });
   await page.goto('/');
   await page.getByTestId('sign-in').click();
-  await page.locator('#username').fill(USERS[who].email);
-  await page.locator('#password').fill(PASSWORD);
-  await page.locator('#kc-login').click();
-  await page.waitForURL((u) => u.origin === new URL(STACK.webUrl).origin);
+  await keycloakLogin(page, who);
   return { ctx, page };
 }
 
@@ -56,6 +54,62 @@ test('an account without a TELUS role is refused after Keycloak login', async ({
   await expect(page).toHaveURL(/\?login=denied/);
   await expect(page.getByText('This account has no access')).toBeVisible();
   expect((await ctx.cookies()).some((c) => c.name.includes('telus_sid'))).toBe(false);
+  await ctx.close();
+});
+
+test('staff must use an authenticator: one without is made to enrol before anything else; tokens prove it, refreshes keep it', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await page.goto('/');
+  await page.getByTestId('sign-in').click();
+  await page.locator('#username').fill(USERS.newStaff.email);
+  await page.locator('#password').fill(PASSWORD);
+  await page.locator('#kc-login').click();
+  // Password accepted, but no way past this page without setting up an authenticator app.
+  await expect(page.locator('#totp')).toBeVisible();
+  expect(new URL(page.url()).origin).toBe(new URL(STACK.keycloakUrl).origin);   // still at Keycloak: no session yet
+  if (!(await page.locator('#kc-totp-secret-key').isVisible())) await page.getByText(/Unable to scan/i).click();
+  const secret = (await page.locator('#kc-totp-secret-key').textContent())!.trim();
+  await page.locator('#totp').fill(await freshCode(USERS.newStaff.email, secret));
+  await page.locator('#userLabel').fill('Nina phone');
+  await page.locator('input[type=submit], button[type=submit]').first().click();
+  // Enrolling is not the same as using the authenticator: the first token has no 'otp', the API answers MFA_REQUIRED and
+  // the app asks Keycloak to sign her in again — password and a (fresh) code from the new authenticator.
+  await page.locator('#password').fill(PASSWORD);
+  await page.locator('#kc-login').click();
+  await page.locator('#otp').fill(await freshCode(USERS.newStaff.email, secret));
+  await page.locator('#kc-login').click();
+  await page.waitForURL((u) => u.origin === new URL(STACK.webUrl).origin);
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole('heading', { name: 'Auctions', level: 1 })).toBeVisible();     // the staff API accepted the token
+
+  // The token records the second factor (the API refuses staff tokens without it) — and a refreshed token keeps it.
+  const sid = (await ctx.cookies()).find((c) => c.name === 'telus_sid')!.value;
+  const r = createClient({ url: STACK.redisUrl });
+  await r.connect();
+  const key = keyOf('sess', sid);
+  const read = async () => JSON.parse(unseal((await r.get(key))!, STACK.sessionSecret)!);
+  const amrOf = (jwt: string) => JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString()).amr as string[];
+  const before = await read();
+  expect(amrOf(before.accessToken)).toEqual(expect.arrayContaining(['pwd', 'otp']));
+  await r.set(key, seal(JSON.stringify({ ...before, accessExp: Math.floor(Date.now() / 1000) - 1 }), STACK.sessionSecret), { KEEPTTL: true });
+  await page.goto('/admin');
+  await expect(page.getByRole('heading', { name: 'Auctions', level: 1 })).toBeVisible();
+  const after = await read();
+  expect(after.accessToken).not.toBe(before.accessToken);
+  expect(amrOf(after.accessToken)).toEqual(expect.arrayContaining(['otp']));
+
+  // Web session gone but Keycloak's SSO session alive (e.g. idle timeout): signing in again needs no password, and the
+  // new token must still show the second factor — otherwise staff would be bounced to a step-up every time.
+  await ctx.clearCookies({ name: 'telus_sid' });
+  await page.goto('/');
+  await page.getByTestId('sign-in').click();
+  await page.waitForURL((u) => u.origin === new URL(STACK.webUrl).origin && u.pathname !== '/');
+  await expect(page.getByRole('heading', { name: 'Auctions', level: 1 })).toBeVisible();
+  const sid2 = (await ctx.cookies()).find((c) => c.name === 'telus_sid')!.value;
+  const again = JSON.parse(unseal((await r.get(keyOf('sess', sid2)))!, STACK.sessionSecret)!);
+  expect(amrOf(again.accessToken)).toEqual(expect.arrayContaining(['otp']));
+  await r.quit();
   await ctx.close();
 });
 

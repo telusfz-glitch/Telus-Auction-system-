@@ -54,6 +54,7 @@ import { WorkersService } from './workers/workers.service';
         new TokenVerifier({
           issuer: env.KEYCLOAK_ISSUER,
           audience: env.API_AUDIENCE,
+          staffAmr: env.STAFF_MFA_AMR.split(',').map((x) => x.trim()).filter(Boolean),
           getKey: createRemoteJWKSet(new URL(env.KEYCLOAK_JWKS_URI ?? `${env.KEYCLOAK_ISSUER}/protocol/openid-connect/certs`), {
             cooldownDuration: 30_000,
             cacheMaxAge: 600_000,

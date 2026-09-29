@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable, Unauthor
 import { Reflector } from '@nestjs/core';
 import { WsException } from '@nestjs/websockets';
 import { IS_PUBLIC } from './decorators';
-import { ForbiddenPrincipalError, TokenVerifier } from './token-verifier';
+import { ForbiddenPrincipalError, MfaRequiredError, TokenVerifier } from './token-verifier';
 
 const MAX_TOKEN_LENGTH = 8192;
 
@@ -29,6 +29,10 @@ export class JwtAuthGuard implements CanActivate {
       req.principal = await this.verifier.verify(token);
       return true;
     } catch (err) {
+      // The one refusal the web app acts on: it re-runs the login so the user signs in with their authenticator.
+      if (err instanceof MfaRequiredError) {
+        throw new ForbiddenException({ statusCode: 403, code: 'MFA_REQUIRED', message: 'Sign in again with your authenticator app.' });
+      }
       if (err instanceof ForbiddenPrincipalError) throw new ForbiddenException();
       throw new UnauthorizedException();
     }

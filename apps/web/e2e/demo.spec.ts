@@ -6,7 +6,8 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 import { mkdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { Pool } from 'pg';
-import { PASSWORD, STACK, USERS } from './stack';
+import { keycloakLogin } from './login';
+import { STACK, USERS } from './stack';
 
 test.skip(!process.env.DEMO, 'demo walkthrough: set DEMO=1');
 test.setTimeout(300_000);
@@ -28,10 +29,7 @@ async function signIn(browser: Browser, who: keyof typeof USERS, video = false) 
   page.on('dialog', (d) => d.accept());
   await page.goto('/');
   await page.getByTestId('sign-in').click();
-  await page.locator('#username').fill(USERS[who].email);
-  await page.locator('#password').fill(PASSWORD);
-  await page.locator('#kc-login').click();
-  await page.waitForURL((u) => u.origin === new URL(STACK.webUrl).origin);
+  await keycloakLogin(page, who);
   return { ctx, page };
 }
 
