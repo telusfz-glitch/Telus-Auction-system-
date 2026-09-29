@@ -7,4 +7,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
   CREATE ROLE keycloak LOGIN PASSWORD '${KEYCLOAK_DB_PASSWORD}' NOSUPERUSER NOCREATEDB NOCREATEROLE;
   CREATE DATABASE keycloak OWNER keycloak;
   GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO telus_app;
+  -- Backups only (scripts/db/backup.sh): read everything, change nothing. BYPASSRLS because RLS is FORCE'd even for the owner.
+  CREATE ROLE telus_backup LOGIN PASSWORD '${BACKUP_DB_PASSWORD}' NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;
+  GRANT pg_read_all_data TO telus_backup;
+  GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO telus_backup;
 EOSQL

@@ -6,6 +6,8 @@ export PGPASSWORD=postgres
 psql -h localhost -U postgres -v ON_ERROR_STOP=1 <<'SQL'
 CREATE ROLE telus_owner LOGIN PASSWORD 'owner' NOSUPERUSER CREATEDB;
 CREATE ROLE telus_app   LOGIN PASSWORD 'app'   NOSUPERUSER NOBYPASSRLS;
+CREATE ROLE telus_backup LOGIN PASSWORD 'backup' NOSUPERUSER BYPASSRLS;
+GRANT pg_read_all_data TO telus_backup;
 CREATE DATABASE telus_test OWNER telus_owner;
 CREATE DATABASE telus_e2e_test OWNER telus_owner;
 SQL

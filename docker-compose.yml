@@ -10,6 +10,7 @@ services:
       POSTGRES_DB: telus
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run scripts/gen-secrets.sh}
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?run scripts/gen-secrets.sh}
+      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD:?run scripts/gen-secrets.sh}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro

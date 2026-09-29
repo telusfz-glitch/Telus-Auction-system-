@@ -21,6 +21,8 @@ env:
   TEST_KEYCLOAK_ISSUER: http://localhost:8080/realms/telus
   TEST_KEYCLOAK_ADMIN_SECRET: e2e-api-admin-secret-0123456789
   TEST_S3_ENDPOINT: http://127.0.0.1:5055
+  TEST_DB_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/postgres
+  TEST_DB_BACKUP_URL: postgres://telus_backup:backup@localhost:5432/telus_test
 
 jobs:
   audit:
@@ -77,11 +79,20 @@ jobs:
           nohup /tmp/moto/bin/moto_server -H 127.0.0.1 -p 5055 > /tmp/moto.log 2>&1 &
           for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:5055/ && exit 0; sleep 1; done
           cat /tmp/moto.log; exit 1
+      # Backup/restore drill tests call pg_dump/pg_restore: the client must match the server (16).
+      - name: PostgreSQL 16 client
+        run: |
+          if ! pg_dump --version 2>/dev/null | grep -q ' 16\.'; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
+            sudo ln -sf /usr/lib/postgresql/16/bin/pg_dump /usr/local/bin/pg_dump
+            sudo ln -sf /usr/lib/postgresql/16/bin/pg_restore /usr/local/bin/pg_restore
+          fi
+          pg_dump --version | grep ' 16\.'
       - run: npm run typecheck -w @telus/api
       # With the TEST_* variables set, `npm test` runs every suite, including DB, Redis-cluster and Keycloak ones.
       - run: npm test -w @telus/api
       # The same suites again with REQUIRE_*: a missing service fails the build instead of skipping silently.
-      - run: npm run test:db -w @telus/api && npm run test:redis -w @telus/api && npm run test:kc -w @telus/api && npm run test:s3 -w @telus/api
+      - run: npm run test:db -w @telus/api && npm run test:redis -w @telus/api && npm run test:kc -w @telus/api && npm run test:s3 -w @telus/api && npm run test:backup -w @telus/api
 
   web:
     name: Web — typecheck, unit, build, end-to-end

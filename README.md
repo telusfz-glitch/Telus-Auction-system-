@@ -327,8 +327,26 @@ finance settles one — and saves numbered screenshots plus each bidder's browse
 | `telus_worker_failures_total{loop}` | scheduler, outbox, email, audit-ship loops that threw | any increase |
 | `telus_backlog{what="auctions_live"}`, `telus_process_*`, `telus_nodejs_*` | context, CPU, memory, event-loop lag | event-loop lag > 200 ms |
 
+## Backups and restore drill (step 14)
+- **Backup** — `BACKUP_DB_URL=postgres://telus_backup:…@host/telus scripts/db/backup.sh <dir>`: one consistent `pg_dump`
+  snapshot (custom format) + `.sha256`; with `BACKUP_GPG_RECIPIENT` set, the dump is encrypted to that key and the plaintext
+  removed. `telus_backup` (created by `infra/postgres/init/00-roles.sh`, password `BACKUP_DB_PASSWORD`) can read everything and
+  change nothing (`pg_read_all_data`) and has `BYPASSRLS`: row-level security is FORCE'd even for the owner, so a dump as any
+  other role is refused rather than silently incomplete.
+- **Restore drill** — `DRILL_ADMIN_URL=postgres://<admin>@restore-host/postgres scripts/db/restore-drill.sh <file> [source]`
+  restores into a throwaway database on an **isolated** server (with triggers disabled, so rows come back byte for byte) and
+  checks: checksum, all migrations, the audit hash chain, every lot's price = top of its bid ledger, every invoice = sum of its
+  lines, FORCE'd RLS and audit triggers still in place, and (right after a backup, with `source`) row counts equal the live
+  database. Exit 0 only if everything passes.
+- **Tested** (`backup.spec`, in CI): good backup passes; a damaged file is stopped by its checksum before restoring; a backup
+  of a secretly edited database fails on the audit chain; dumping without `BYPASSRLS` is refused. (The damaged-file test caught
+  a real bug in the first version of the drill script: a failed check inside `a && b` does not stop a `set -e` script.)
+- **In production**: keep the managed database's point-in-time recovery on as well; ship these dumps off-site with a retention
+  lock (e.g. the Object Lock bucket, a separate prefix); run the drill at least monthly and after every schema change, and alert
+  if it fails or has not run.
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 164/164 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 168/168 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
 Admin API; web 26 unit tests and 12 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
@@ -438,6 +456,6 @@ through `docker compose exec`; the same admin operations were verified via the R
 **Phase D — prove it before go-live**
 13. `npm run load:http` on production-like hardware, load generator on separate machines.
 14. Third-party penetration test; fix findings.
-15. Backups + restore drill for PostgreSQL; wire `/health/ready` into the load balancer and `/metrics` into Prometheus with the
-    alerts in "Operations" (the endpoints exist — step 13).
+15. Schedule `scripts/db/backup.sh` + a monthly `restore-drill.sh` (both exist — step 14); wire `/health/ready` into the load
+    balancer and `/metrics` into Prometheus with the alerts in "Operations" (step 13).
 16. A pilot auction with one or two friendly customers, then go live.

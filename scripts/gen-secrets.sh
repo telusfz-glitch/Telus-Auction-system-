@@ -8,6 +8,8 @@ OWNER=$(r); APP=$(r); KCDB=$(r); REDIS=$(r); WEBSECRET=$(r); APIADMIN=$(r)
 cat > .env <<ENVEOF
 OWNER_DB_PASSWORD=$OWNER
 APP_DB_PASSWORD=$APP
+# Backups only (read-only, BYPASSRLS) — scripts/db/backup.sh
+BACKUP_DB_PASSWORD=$(r)
 KEYCLOAK_DB_PASSWORD=$KCDB
 REDIS_PASSWORD=$REDIS
 KEYCLOAK_ADMIN_USER=kcadmin

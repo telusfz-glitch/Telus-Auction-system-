@@ -11,6 +11,7 @@
     "test:redis": "REQUIRE_REDIS_TESTS=1 jest --runInBand test/realtime-cluster.e2e.spec.ts",
     "test:kc": "REQUIRE_KEYCLOAK_TESTS=1 jest --runInBand test/team.kc.spec.ts",
     "test:s3": "REQUIRE_S3_TESTS=1 jest --runInBand test/audit-ship.spec.ts",
+    "test:backup": "REQUIRE_BACKUP_TESTS=1 jest --runInBand test/backup.spec.ts",
     "load": "ts-node -r tsconfig-paths/register test/load/bid-load.ts",
     "load:http": "ts-node -r tsconfig-paths/register test/load/http-load.ts",
     "audit:verify": "ts-node -r tsconfig-paths/register src/audit/verify-cli.ts"
