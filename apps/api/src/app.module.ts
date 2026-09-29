@@ -16,6 +16,8 @@ import { HttpThrottlerGuard } from './auth/http-throttler.guard';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { AuditShipperService } from './audit/audit-shipper.service';
+import { MetricsService } from './ops/metrics.service';
+import { OpsController } from './ops/ops.controller';
 import { TokenVerifier } from './auth/token-verifier';
 import { loadEnv, type Env } from './config/env';
 import { ENV } from './config/tokens';
@@ -44,7 +46,7 @@ import { WorkersService } from './workers/workers.service';
       },
     }),
   ],
-  controllers: [AppController, CustomersController, BidsController, AuctionsController, AdminController, RealtimeController, TeamController, InvoicesController],
+  controllers: [AppController, OpsController, CustomersController, BidsController, AuctionsController, AdminController, RealtimeController, TeamController, InvoicesController],
   providers: [
     { provide: ENV, useFactory: () => loadEnv() },
     {
@@ -76,6 +78,7 @@ import { WorkersService } from './workers/workers.service';
     TeamService,
     InvoicesService,
     AuditShipperService,
+    MetricsService,
     WorkersService,
     // Guard order matters: authenticate → rate-limit (per user; see http-throttler.guard.ts) → authorize. All global,
     // so new routes (and socket handlers) are protected by default.

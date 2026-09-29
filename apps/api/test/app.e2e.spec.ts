@@ -35,6 +35,13 @@ describe('Full app wiring — real AppModule + real security configuration', () 
       expect(JSON.stringify(res.body)).not.toMatch(/stack|jose|at .*\.ts/i);
     });
 
+  it('readiness fails (503, no details) when the database is unreachable; /metrics is off without a token', async () => {
+    const res = await http().get('/health/ready').expect(503);
+    expect(res.body).toMatchObject({ statusCode: 503, code: 'NOT_READY', message: 'Not ready.' });
+    expect(Object.keys(res.body).sort()).toEqual(['code', 'correlationId', 'message', 'statusCode']);   // nothing about why
+    await http().get('/metrics').expect(404);
+  });
+
   it('a forged token → 401', () => http().get('/admin/customers').set('Authorization', 'Bearer eyJhbGciOiJub25lIn0.e30.').expect(401));
 
   it('CORS: unknown origin gets no allow header; configured origin does', async () => {

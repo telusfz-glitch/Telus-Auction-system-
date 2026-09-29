@@ -309,8 +309,26 @@ finance settles one — and saves numbered screenshots plus each bidder's browse
 - **Proven** in the e2e suite against real Keycloak: forced enrolment, the step-up, `amr` in the stored token, kept on refresh
   and on a silent SSO re-login; seeded staff use pre-provisioned TOTP secrets and never reuse a code (single-use codes kept).
 
+## Operations: readiness and metrics (step 13)
+- **`GET /health`** — liveness (the process answers). **`GET /health/ready`** — readiness for the load balancer: 200 only if this
+  instance reaches PostgreSQL (and Redis when `REDIS_URL` is set); otherwise 503 `NOT_READY` with no details.
+- **`GET /metrics`** — Prometheus format, off (404) unless `METRICS_TOKEN` is set; the scraper sends `Authorization: Bearer
+  <token>`, and a wrong token also gets 404. Counters are per instance (Prometheus sums them); backlogs come from the
+  system-only `ops_metrics()` (counts and ages only, no customer data).
+
+| Metric | Meaning | Suggested alert |
+|---|---|---|
+| `telus_database_up` | the scrape could read the database | `== 0` for 2 min |
+| `telus_bids_total{outcome}` | bids by outcome (`accepted`, `BID_TOO_LOW`, `LOGIN_SUSPENDED`, …, `error`) | `rate(outcome="error") > 0` for 5 min |
+| `telus_bid_duration_seconds` | API time per bid | p95 > 1 s for 5 min during a live auction |
+| `telus_backlog{what="outbox_oldest_unpublished_seconds"}` | live updates waiting | > 30 s (pushes are stuck) |
+| `telus_backlog{what="email_oldest_pending_seconds"}` / `email_failed` | notification emails | > 15 min / any increase |
+| `telus_backlog{what="audit_oldest_unshipped_seconds"}` | audit rows not yet in write-once storage | > 3 × `AUDIT_SHIP_INTERVAL_MS` |
+| `telus_worker_failures_total{loop}` | scheduler, outbox, email, audit-ship loops that threw | any increase |
+| `telus_backlog{what="auctions_live"}`, `telus_process_*`, `telus_nodejs_*` | context, CPU, memory, event-loop lag | event-loop lag > 200 ms |
+
 ## Honest status: verified vs not
-**Verified here:** typecheck clean (API and web); API 159/159 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
+**Verified here:** typecheck clean (API and web); API 164/164 tests pass (notifications against a real in-process SMTP server) (repeated full runs, no deadlocks logged), the database ones
 against a real PostgreSQL 16 using the restricted runtime role and a non-superuser owner, the team suite against the real Keycloak
 Admin API; web 26 unit tests and 12 Playwright end-to-end tests pass against a real **Keycloak 26.6.4** (this realm file imported), the API, Postgres 16, Redis 7 and the production web build. The realtime and admin suites run the real AppModule over
 real HTTP and sockets; the cluster suite runs two instances against a real Redis 7. The close-race and revoke-eviction tests were
@@ -420,5 +438,6 @@ through `docker compose exec`; the same admin operations were verified via the R
 **Phase D — prove it before go-live**
 13. `npm run load:http` on production-like hardware, load generator on separate machines.
 14. Third-party penetration test; fix findings.
-15. Backups + restore drill for PostgreSQL; monitoring and alerts (API errors, outbox backlog, email failures, audit shipping lag).
+15. Backups + restore drill for PostgreSQL; wire `/health/ready` into the load balancer and `/metrics` into Prometheus with the
+    alerts in "Operations" (the endpoints exist — step 13).
 16. A pilot auction with one or two friendly customers, then go live.

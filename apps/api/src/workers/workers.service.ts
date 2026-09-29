@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } f
 import type { Env } from '../config/env';
 import { ENV } from '../config/tokens';
 import { AuditShipperService } from '../audit/audit-shipper.service';
+import { MetricsService } from '../ops/metrics.service';
 import { LifecycleService } from '../lifecycle/lifecycle.service';
 import { NotificationService } from '../notifications/notification.service';
 import { OutboxService } from '../outbox/outbox.service';
@@ -28,6 +29,7 @@ export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly gateway: RealtimeGateway,
     private readonly notifications: NotificationService,
     private readonly auditShipper: AuditShipperService,
+    private readonly metrics: MetricsService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -60,7 +62,11 @@ export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
       if (running || this.stopped) return;
       running = true;
       const run = fn()
-        .catch((e) => { if (!this.stopped) this.logger.error(`${name} loop failed`, e instanceof Error ? e.stack : String(e)); })
+        .catch((e) => {
+          if (this.stopped) return;
+          this.metrics.workerFailures.inc({ loop: name });
+          this.logger.error(`${name} loop failed`, e instanceof Error ? e.stack : String(e));
+        })
         .finally(() => { running = false; this.inFlight.delete(run); });
       this.inFlight.add(run);
     }, ms);

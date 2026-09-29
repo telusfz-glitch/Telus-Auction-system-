@@ -31,6 +31,8 @@ const EnvSchema = z.object({
   // link (needs the realm's SMTP settings). Links expire after TEAM_INVITE_LIFESPAN_SECONDS.
   TEAM_INVITE_METHOD: z.enum(['password', 'email']).default('password'),
   TEAM_INVITE_LIFESPAN_SECONDS: z.coerce.number().int().min(300).max(7 * 86400).default(86400),
+  // Prometheus scrape token for GET /metrics (sent as a bearer token). Unset ⇒ /metrics answers 404.
+  METRICS_TOKEN: z.string().min(32).optional(),
   // Rate limits shared by all instances when set (falls back to REDIS_URL, then to in-memory).
   RATE_LIMIT_REDIS_URL: z.string().url().optional(),
   // Requests per minute per route, per signed-in user (anonymous requests: per client address). Some routes set their own.

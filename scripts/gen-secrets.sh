@@ -22,6 +22,8 @@ CORS_ORIGINS=http://localhost:3000
 REDIS_URL=redis://:$REDIS@localhost:6379
 # Socket tickets for browsers (API) — used for nothing else
 REALTIME_TICKET_SECRET=$(r)
+# Prometheus scrape token for GET /metrics (give it to the scraper only)
+METRICS_TOKEN=$(r)
 # Keycloak realm import placeholders (telus-realm.json) — the web app's confidential client
 TELUS_WEB_URL=http://localhost:3000
 TELUS_WEB_CLIENT_SECRET=$WEBSECRET
