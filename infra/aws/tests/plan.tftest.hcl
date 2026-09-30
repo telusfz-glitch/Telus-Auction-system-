@@ -121,6 +121,12 @@ run "staging_plans" {
     condition     = aws_scheduler_schedule.job["drill"].schedule_expression == "cron(0 2 1 * ? *)" && one(aws_ecs_task_definition.task["drill"].ephemeral_storage).size_in_gib == 30
     error_message = "a monthly restore drill runs, with its own disk for the restore"
   }
+  assert {
+    condition = (aws_cloudwatch_metric_alarm.app["outbox_stuck"].namespace == "TELUS/staging"
+      && aws_cloudwatch_metric_alarm.app["bid_latency"].extended_statistic == "p99"
+    && aws_cloudwatch_metric_alarm.app["metrics_missing"].treat_missing_data == "breaching")
+    error_message = "application metrics alarm on stuck live updates, slow bids, and on the metrics going silent"
+  }
 }
 
 run "production_plans" {

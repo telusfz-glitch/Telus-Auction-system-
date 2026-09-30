@@ -12,7 +12,8 @@ default so customer data stays in-country.
 | Data | RDS PostgreSQL 16 (encrypted, private, TLS enforced, point-in-time recovery, enhanced monitoring; Multi-AZ in production); ElastiCache Redis 7 (TLS + AUTH, encrypted; failover in production) |
 | Storage | S3 audit bucket (Object Lock **COMPLIANCE**, `audit_retention_days`), S3 backups bucket (Object Lock, `backup_lock_days`), access-log bucket; all public access blocked, TLS-only |
 | Secrets | Secrets Manager: generated secrets (`app`) and third-party ones you fill in (`external`: Stripe, SMTP); one KMS key for everything at rest, rotation on |
-| Alerts | SNS e-mail (`alarm_email`): ALB 5xx, database CPU/storage, Redis CPU, unhealthy targets, any one-off/scheduled task that exits non-zero |
+| Alerts | SNS e-mail (`alarm_email`): ALB 5xx, database CPU/storage, Redis CPU, unhealthy targets, any one-off/scheduled task that exits non-zero (including the monthly restore drill); application alarms from the API's own metrics (namespace `TELUS/<env>`): live updates stuck > 60 s, e-mail stuck > 15 min, audit copy behind > 1 h, bid errors, bid p99 > 1 s, background-loop failures, and no metrics at all for 15 min |
+| Dashboard | CloudWatch dashboard `telus-<env>`: bids per minute, bid time p50/p99, live-update and e-mail backlog age, audit copy lag, auctions live, loop failures |
 
 ## First deployment, in order
 1. **State bucket.** Create an S3 bucket (versioning on) for Terraform state, copy `envs/example.backend.hcl` to

@@ -8,6 +8,7 @@ import { TokenVerifier } from '../src/auth/token-verifier';
 import { configureApp } from '../src/bootstrap';
 import { loadEnv } from '../src/config/env';
 import { DbService } from '../src/db/db.service';
+import { WorkersService } from '../src/workers/workers.service';
 import { asStaff, resetDb, staffP } from './db-helpers';
 import { AUD, ISS, customerClaims, makeKeys, signToken } from './helpers';
 
@@ -112,6 +113,38 @@ const FORWARD_KEY = 'client-ip-forward-test-key-0123456789abcdef';
     expect(ips['300']).not.toBe('198.51.100.9');            // wrong key: the header is ignored
     expect(ips['400']).not.toBe('not-an-ip');
     expect(ips['300']).toMatch(/127\.0\.0\.1|::1/);        // the direct peer instead
+  });
+
+  it('CloudWatch embedded-metric-format line: counters are per-interval changes, backlogs and a latency sample included', async () => {
+    const workers = app.get(WorkersService);
+    const emit = async () => {
+      const lines: string[] = [];
+      await workers.emitMetrics('TELUS/test', (l) => lines.push(l));
+      expect(lines).toHaveLength(1);
+      expect(lines[0].endsWith('\n')).toBe(true);
+      return JSON.parse(lines[0]);
+    };
+    const first = await emit();                                            // everything since start-up
+    const def = first._aws.CloudWatchMetrics[0];
+    expect(def).toMatchObject({ Namespace: 'TELUS/test', Dimensions: [['Service']] });
+    expect(first.Service).toBe('api');
+    for (const m of def.Metrics) expect(first).toHaveProperty(m.Name);       // every declared metric has a value
+    expect(first).toMatchObject({ DatabaseUp: 1, AuctionsLive: 1, OutboxUnpublished: expect.any(Number), EmailFailed: 0 });
+    expect(first.BidsAccepted).toBeGreaterThan(0);
+
+    const tok = await signToken(priv, customerClaims('customer_bidder', CU), { sub: 'ops-bidder' });
+    await http().post('/bids').set('Authorization', `Bearer ${tok}`)
+      .send({ lotId: LOT, amount: 10_000, idempotencyKey: '66666666-6666-4666-8666-666666666666' }).expect(201);
+    await http().post('/bids').set('Authorization', `Bearer ${tok}`)
+      .send({ lotId: LOT, amount: 10_000, idempotencyKey: '77777777-7777-4777-8777-777777777777' }).expect(422); // too low
+    const second = await emit();
+    expect(second).toMatchObject({ BidsAccepted: 1, BidsRefused: 1, BidErrors: 0, WorkerFailures: 0 });
+    expect(second.BidLatency).toHaveLength(2);
+    expect(second._aws.CloudWatchMetrics[0].Metrics).toContainEqual({ Name: 'BidLatency', Unit: 'Seconds' });
+
+    const third = await emit();                                            // nothing happened in between
+    expect(third).toMatchObject({ BidsAccepted: 0, BidsRefused: 0 });
+    expect(third).not.toHaveProperty('BidLatency');
   });
 
   it('ops_metrics() is for the system context only', async () => {

@@ -40,6 +40,10 @@ const EnvSchema = z.object({
   STRIPE_API_URL: z.string().url().optional(),   // tests only: a local stand-in for api.stripe.com
   // Prometheus scrape token for GET /metrics (sent as a bearer token). Unset ⇒ /metrics answers 404.
   METRICS_TOKEN: z.string().min(32).optional(),
+  // CloudWatch: when set, every METRICS_EMF_INTERVAL_MS the API prints one embedded-metric-format line to stdout under this
+  // namespace (the awslogs driver ships it; CloudWatch turns it into metrics). Unset ⇒ nothing printed.
+  METRICS_EMF_NAMESPACE: z.string().regex(/^[A-Za-z0-9/_.-]{1,255}$/).optional(),
+  METRICS_EMF_INTERVAL_MS: z.coerce.number().int().min(1000).max(3_600_000).default(60_000),
   // Rate limits shared by all instances when set (falls back to REDIS_URL, then to in-memory).
   RATE_LIMIT_REDIS_URL: z.string().url().optional(),
   // Requests per minute per route, per signed-in user (anonymous requests: per client address). Some routes set their own.

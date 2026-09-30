@@ -11,9 +11,9 @@ import { route } from '../realtime/routing';
 
 /**
  * In-process background loops: the auction scheduler (every second), the outbox publisher (every 250 ms, draining
- * the backlog each time) and the outbox purge (hourly). Each loop never overlaps itself. All are safe with several
- * API instances running: the database serialises transitions, SKIP LOCKED splits the outbox, and with REDIS_URL set
- * the pushes reach sockets connected to every instance.
+ * the backlog each time), the outbox purge (hourly) and, when configured, CloudWatch metrics (every minute). Each loop
+ * never overlaps itself. All are safe with several API instances running: the database serialises transitions, SKIP
+ * LOCKED splits the outbox, and with REDIS_URL set the pushes reach sockets connected to every instance.
  */
 @Injectable()
 export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
@@ -39,6 +39,13 @@ export class WorkersService implements OnApplicationBootstrap, OnModuleDestroy {
     this.every('outbox-purge', 3_600_000, () => this.outbox.purge(this.env.OUTBOX_RETENTION_DAYS));
     if (this.notifications.enabled) this.every('email', this.env.EMAIL_INTERVAL_MS, () => this.drainEmail());
     if (this.auditShipper.enabled) this.every('audit-ship', this.env.AUDIT_SHIP_INTERVAL_MS, () => this.drainAudit());
+    const ns = this.env.METRICS_EMF_NAMESPACE;
+    if (ns) this.every('metrics-emf', this.env.METRICS_EMF_INTERVAL_MS, () => this.emitMetrics(ns));
+  }
+
+  /** One CloudWatch embedded-metric-format line on stdout (a raw JSON line, not through the logger). */
+  async emitMetrics(namespace: string, write: (line: string) => void = (l) => process.stdout.write(l)): Promise<void> {
+    write(`${JSON.stringify(await this.metrics.emf(namespace, 'api'))}\n`);
   }
 
   /** Ships audit batches until caught up (or shutdown starts). */

@@ -33,7 +33,7 @@ locals {
       NODE_ENV                  = "production", PORT = 4000, TRUST_PROXY = 1, KEYCLOAK_ISSUER = local.issuer, API_AUDIENCE = "telus-api",
       CORS_ORIGINS              = "https://${var.app_domain}", PUBLIC_WEB_URL = "https://${var.app_domain}", MAIL_FROM = var.mail_from,
       DISPLAY_TIMEZONE          = "Asia/Dubai", AUDIT_SHIP_BUCKET = aws_s3_bucket.audit.bucket, AUDIT_SHIP_REGION = var.region,
-      AUDIT_SHIP_RETENTION_DAYS = var.env == "production" ? 2557 : 30,
+      AUDIT_SHIP_RETENTION_DAYS = var.env == "production" ? 2557 : 30, METRICS_EMF_NAMESPACE = local.metrics_namespace,
     }
     web = {
       NODE_ENV = "production", WEB_URL = "https://${var.app_domain}", OIDC_ISSUER = local.issuer, OIDC_CLIENT_ID = "telus-web",

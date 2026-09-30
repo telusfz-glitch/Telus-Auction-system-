@@ -320,6 +320,11 @@ finance settles one — and saves numbered screenshots plus each bidder's browse
 - **`GET /metrics`** — Prometheus format, off (404) unless `METRICS_TOKEN` is set; the scraper sends `Authorization: Bearer
   <token>`, and a wrong token also gets 404. Counters are per instance (Prometheus sums them); backlogs come from the
   system-only `ops_metrics()` (counts and ages only, no customer data).
+- **CloudWatch (AWS)** — with `METRICS_EMF_NAMESPACE` set (Terraform sets `TELUS/<env>`), the API also prints one
+  embedded-metric-format line a minute; CloudWatch turns it into metrics without an agent: `BidsAccepted`, `BidsRefused`,
+  `BidErrors`, `BidLatency` (percentiles), `WorkerFailures`, `DatabaseUp` and the backlog gauges below (e.g.
+  `OutboxOldestUnpublishedSeconds`). Terraform adds a dashboard and e-mail alarms for stuck live updates, stuck e-mail,
+  stuck audit shipping, bid errors, slow bids (p99 > 1 s), loop failures, and metrics going silent.
 
 | Metric | Meaning | Suggested alert |
 |---|---|---|
@@ -522,6 +527,6 @@ through `docker compose exec`; the same admin operations were verified via the R
 13. `npm run load:http` on production-like hardware, load generator on separate machines.
 14. Third-party penetration test; fix findings.
 15. ~~Schedule backups, wire health checks~~ — done on AWS (step 16): nightly backup task, `/health/ready` as the ALB health
-    check, alarms by e-mail, and a monthly restore drill that alarms on failure or a stale backup. Still to do: scraping
-    `/metrics` (Prometheus or CloudWatch agent).
+    check, alarms by e-mail, a monthly restore drill that alarms on failure or a stale backup, and application metrics in
+    CloudWatch with a dashboard and alarms.
 16. A pilot auction with one or two friendly customers, then go live.
