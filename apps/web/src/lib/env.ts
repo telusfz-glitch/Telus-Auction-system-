@@ -16,6 +16,8 @@ const Schema = z.object({
   /** Encrypts session records at rest in Redis. 32+ random characters. */
   SESSION_SECRET: z.string().min(32),
   DISPLAY_TIMEZONE: z.string().default('Asia/Dubai'),
+  /** Shared with the API only: lets the API record the end user's address instead of this server's (see api.ts). */
+  CLIENT_IP_FORWARD_SECRET: z.string().min(32).optional(),
   /** Local end-to-end testing of the production build over plain http. Never set this on a real deployment. */
   ALLOW_HTTP_FOR_LOCAL_TESTING: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
 });

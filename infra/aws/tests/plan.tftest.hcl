@@ -113,6 +113,10 @@ run "staging_plans" {
     condition     = strcontains(aws_kms_key.main.policy, "events.amazonaws.com") && strcontains(aws_kms_key.main.policy, "cloudwatch.amazonaws.com")
     error_message = "alarm publishers must be able to use the key that encrypts the alarm topic"
   }
+  assert {
+    condition     = length(aws_wafv2_web_acl.main.rule) > 0 && length([for r in aws_wafv2_web_acl.main.rule : r if r.name == "rate-per-ip" && length(r.statement[0].rate_based_statement[0].scope_down_statement) == 1]) == 1
+    error_message = "the per-IP rate limit must exempt our own NAT egress (all web → API traffic comes from it)"
+  }
 }
 
 run "production_plans" {

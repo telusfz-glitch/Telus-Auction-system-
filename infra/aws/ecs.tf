@@ -51,8 +51,8 @@ locals {
     verify    = { NODE_ENV = "production", AUDIT_SHIP_BUCKET = aws_s3_bucket.audit.bucket, AUDIT_SHIP_REGION = var.region, KEYCLOAK_ISSUER = local.issuer }
   }
   secrets = {
-    api = merge({ for k in ["DATABASE_URL", "REDIS_URL", "REALTIME_TICKET_SECRET", "KEYCLOAK_ADMIN_CLIENT_SECRET", "METRICS_TOKEN"] : k => local.secret[k] }, local.external)
-    web = { for k in ["REDIS_URL", "SESSION_SECRET", "OIDC_CLIENT_SECRET"] : k => local.secret[k] }
+    api = merge({ for k in ["DATABASE_URL", "REDIS_URL", "REALTIME_TICKET_SECRET", "KEYCLOAK_ADMIN_CLIENT_SECRET", "METRICS_TOKEN", "CLIENT_IP_FORWARD_SECRET"] : k => local.secret[k] }, local.external)
+    web = { for k in ["REDIS_URL", "SESSION_SECRET", "OIDC_CLIENT_SECRET", "CLIENT_IP_FORWARD_SECRET"] : k => local.secret[k] }
     keycloak = {
       KC_DB_PASSWORD                = local.secret["KC_DB_PASSWORD"]
       KC_BOOTSTRAP_ADMIN_PASSWORD   = local.secret["KC_BOOTSTRAP_ADMIN_PASSWORD"]

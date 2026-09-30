@@ -1,3 +1,4 @@
+import { AUCTION_MANAGERS, CUSTOMER_BIDDERS } from '@telus/shared';
 import 'server-only';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
@@ -21,5 +22,5 @@ export async function currentViewer(): Promise<Viewer | null> {
 
 /** UI hint only: the API enforces every permission itself. */
 export const hasRole = (v: Pick<Viewer, 'roles'>, ...roles: string[]) => v.roles.some((r) => roles.includes(r));
-export const MANAGERS = ['super_admin', 'auction_manager'];
-export const BIDDERS = ['customer_admin', 'customer_bidder'];
+export const MANAGERS = AUCTION_MANAGERS;
+export const BIDDERS = CUSTOMER_BIDDERS;

@@ -1,7 +1,7 @@
 # Generated secrets live in Secrets Manager (and, unavoidably, in Terraform state: keep the state bucket encrypted and
 # access-restricted). ECS injects individual JSON keys as environment variables; nothing is baked into images.
 resource "random_password" "gen" {
-  for_each = toset(["owner_db", "app_db", "backup_db", "keycloak_db", "session", "realtime_ticket", "oidc_web", "kc_api_admin", "metrics", "kc_bootstrap"])
+  for_each = toset(["owner_db", "app_db", "backup_db", "keycloak_db", "session", "realtime_ticket", "oidc_web", "kc_api_admin", "metrics", "kc_bootstrap", "client_ip_forward"])
   length   = 48
   special  = false
 }
@@ -20,6 +20,7 @@ locals {
     OIDC_CLIENT_SECRET           = random_password.gen["oidc_web"].result
     KEYCLOAK_ADMIN_CLIENT_SECRET = random_password.gen["kc_api_admin"].result
     METRICS_TOKEN                = random_password.gen["metrics"].result
+    CLIENT_IP_FORWARD_SECRET     = random_password.gen["client_ip_forward"].result
     KC_DB_PASSWORD               = random_password.gen["keycloak_db"].result
     KC_BOOTSTRAP_ADMIN_PASSWORD  = random_password.gen["kc_bootstrap"].result
     OWNER_PASSWORD               = random_password.gen["owner_db"].result

@@ -26,6 +26,8 @@ REDIS_URL=redis://:$REDIS@localhost:6379
 REALTIME_TICKET_SECRET=$(r)
 # Prometheus scrape token for GET /metrics (give it to the scraper only)
 METRICS_TOKEN=$(r)
+# Web app → API: lets the API record the end user's address (not the web server's) in the audit log.
+CLIENT_IP_FORWARD_SECRET=$(r)
 # Keycloak realm import placeholders (telus-realm.json) — the web app's confidential client
 TELUS_WEB_URL=http://localhost:3000
 TELUS_WEB_CLIENT_SECRET=$WEBSECRET

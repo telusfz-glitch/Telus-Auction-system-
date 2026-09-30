@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, HttpCode, Ip, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
-import {
+import { AUCTION_MANAGERS, LIMIT_SETTERS, SECURITY_ADMINS,
   BracketsSchema, CreateAuctionSchema, CreateLotsSchema, CreateMarginRuleSetSchema, InviteCustomersSchema, STAFF_ROLES,
   SetCustomerLimitSchema, UpdateAuctionSchema, UpdateCustomerSchema, UpdateLotSchema, UpdateSecuritySettingsSchema,
   type BracketsInput, type CreateAuctionInput, type CreateLotsInput, type CreateMarginRuleSetInput, type InviteCustomersInput,
@@ -12,9 +12,7 @@ import { AdminAuctionsService } from './admin-auctions.service';
 import { AdminSettingsService } from './admin-settings.service';
 
 /** Who may do what. Reads are open to every staff role; writes are narrow. */
-const MANAGERS = ['super_admin', 'auction_manager'];
-const LIMIT_SETTERS = ['super_admin', 'finance'];
-const SECURITY_ADMINS = ['super_admin'];
+const MANAGERS = AUCTION_MANAGERS;
 const Id = new ParseUUIDPipe();
 
 @Controller('admin')

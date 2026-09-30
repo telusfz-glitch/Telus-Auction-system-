@@ -1,5 +1,5 @@
 import { Controller, Get, HttpCode, Ip, Param, ParseUUIDPipe, Post } from '@nestjs/common';
-import { CUSTOMER_ROLES, STAFF_ROLES } from '@telus/shared';
+import { AUCTION_MANAGERS, CUSTOMER_BIDDERS, CUSTOMER_ROLES, STAFF_ROLES } from '@telus/shared';
 import { CurrentPrincipal, Roles } from '../auth/decorators';
 import type { Principal } from '../auth/principal';
 import { AuctionsService } from './auctions.service';
@@ -23,7 +23,7 @@ export class AuctionsController {
   // Viewers cannot bid, so they cannot accept terms either (the database policy enforces the same).
   @Post('auctions/:id/accept-terms')
   @HttpCode(200)
-  @Roles('customer_admin', 'customer_bidder')
+  @Roles(...CUSTOMER_BIDDERS)
   acceptTerms(@CurrentPrincipal() p: Principal, @Param('id', ParseUUIDPipe) id: string, @Ip() ip: string) {
     return this.auctions.acceptTerms(p, id, ip);
   }
@@ -42,7 +42,7 @@ export class AuctionsController {
 
   @Post('admin/auctions/:id/finalize')
   @HttpCode(200)
-  @Roles('super_admin', 'auction_manager')
+  @Roles(...AUCTION_MANAGERS)
   finalize(@CurrentPrincipal() p: Principal, @Param('id', ParseUUIDPipe) id: string, @Ip() ip: string) {
     return this.auctions.finalize(p, id, ip);
   }

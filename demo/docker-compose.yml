@@ -84,6 +84,7 @@ services:
       SMTP_URL: smtp://mailpit:1025
       MAIL_FROM: TELUS Auctions (demo) <no-reply@auctions.telus.test>
       PUBLIC_WEB_URL: http://localhost:3000
+      CLIENT_IP_FORWARD_SECRET: demo-client-ip-forward-secret-0123456789
     volumes: ["./:/demo:ro"]
     ports: ["127.0.0.1:4000:4000"]
     depends_on:
@@ -104,6 +105,7 @@ services:
       REDIS_URL: redis://:demo-redis-pw@redis:6379/2
       SESSION_SECRET: demo-session-secret-0123456789abcdef-0123456789
       ALLOW_HTTP_FOR_LOCAL_TESTING: "true"   # plain http on localhost; never on a real deployment
+      CLIENT_IP_FORWARD_SECRET: demo-client-ip-forward-secret-0123456789
     volumes: ["./:/demo:ro"]
     ports: ["127.0.0.1:3000:3000"]
     depends_on:

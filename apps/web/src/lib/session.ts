@@ -1,5 +1,5 @@
 import 'server-only';
-import { CUSTOMER_ROLES, STAFF_ROLES } from '@telus/shared';
+import { CUSTOMER_ROLE_RANK, CUSTOMER_ROLES, STAFF_ROLES } from '@telus/shared';
 import { cookies } from 'next/headers';
 import { keyOf, randomId, seal, unseal } from './crypto';
 import { env, isSecureOrigin } from './env';
@@ -35,7 +35,6 @@ export const SESSION_COOKIE = () => (isSecureOrigin() ? '__Host-telus_sid' : 'te
 const ABSOLUTE_MAX_SECONDS = 10 * 3600;      // matches Keycloak ssoSessionMaxLifespan
 const REFRESH_MARGIN_SECONDS = 30;
 const now = () => Math.floor(Date.now() / 1000);
-const CUSTOMER_RANK = ['customer_admin', 'customer_bidder', 'customer_viewer'];
 
 export class LoginRejected extends Error {}
 
@@ -62,7 +61,7 @@ export function identityFromTokens(tokens: client.TokenEndpointResponse & client
     kind: staff.length ? 'staff' : 'customer',
     roles: staff.length ? staff : customer,
     customerId: staff.length ? null : customerId,
-    customerRole: staff.length ? null : (CUSTOMER_RANK.find((r) => customer.includes(r)) ?? null),
+    customerRole: staff.length ? null : (CUSTOMER_ROLE_RANK.find((r) => customer.includes(r)) ?? null),
     accessToken: tokens.access_token,
     accessExp: typeof claims['exp'] === 'number' ? (claims['exp'] as number) : t + (tokens.expires_in ?? 60),
     refreshToken: tokens.refresh_token ?? previous?.refreshToken ?? null,

@@ -4,7 +4,6 @@ import type { PoolClient } from 'pg';
 import { AuditService } from '../audit/audit.service';
 import type { Principal } from '../auth/principal';
 import { ApiError } from '../common/api-error';
-import { mapPgError } from '../common/pg-errors';
 import { DbService } from '../db/db.service';
 
 const INVOICE = `i.id, i.invoice_number, i.customer_id, i.total_amount, i.status, i.created_at, i.settled_at, i.settlement_note,
@@ -20,19 +19,15 @@ const LINES = `coalesce((SELECT json_agg(json_build_object('lotNumber', l.lot_nu
 export class InvoicesService {
   constructor(private readonly db: DbService, private readonly audit: AuditService) {}
 
-  private run<T>(p: Principal, fn: (c: PoolClient) => Promise<T>): Promise<T> {
-    return this.db.withPrincipal(p, fn).catch((e) => { throw mapPgError(e); });
-  }
-
   async list(p: Principal, status?: string) {
     if (status !== undefined && !['unpaid', 'paid', 'void'].includes(status)) throw new ApiError('BAD_FILTER', 'Unknown status.', 400);
-    return this.run(p, async (c) => (await c.query(
+    return this.db.run(p, async (c) => (await c.query(
       `SELECT ${INVOICE}, ${LINES} FROM invoices i LEFT JOIN auctions a ON a.id = i.auction_id JOIN customers cu ON cu.id = i.customer_id
         WHERE ($1::text IS NULL OR i.status = $1) ORDER BY i.created_at DESC LIMIT 500`, [status ?? null])).rows);
   }
 
   settle(p: Principal, id: string, input: SettleInvoiceInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const inv = (await c.query('SELECT id, status, total_amount::text AS total FROM invoices WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!inv) throw new ApiError('INVOICE_NOT_FOUND', 'Invoice not found.', 404);
       if (inv.status !== 'unpaid') throw new ApiError('INVALID_STATE', `This invoice is already ${inv.status}.`, 409);

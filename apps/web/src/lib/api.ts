@@ -1,7 +1,8 @@
 import 'server-only';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { env } from './env';
+import { clientAddress } from './net';
 import type { Session } from './session';
 
 /** A deliberate API refusal: `code` is stable, `message` is safe to show. */
@@ -17,12 +18,20 @@ export const STEP_UP_COOKIE = 'telus_stepup';
 // Server errors whose API message is written for users (no internals) and tells them what to do.
 const SAFE_5XX = new Set(['INVITE_EMAIL_FAILED', 'PAYMENTS_DISABLED', 'PAYMENT_PROVIDER_UNAVAILABLE']);
 
+async function forwardedClient(): Promise<Record<string, string>> {
+  const key = env().CLIENT_IP_FORWARD_SECRET;
+  if (!key) return {};
+  const ip = clientAddress((await headers()).get('x-forwarded-for'));
+  return ip ? { 'x-telus-client-ip': ip, 'x-telus-client-ip-key': key } : {};
+}
+
 export async function api<T>(session: Session, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const res = await fetch(`${env().API_URL}${path}`, {
     method: init.method ?? 'GET',
     headers: {
       authorization: `Bearer ${session.accessToken}`,
       ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      ...(await forwardedClient()),
     },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     cache: 'no-store',

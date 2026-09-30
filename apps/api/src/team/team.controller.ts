@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Ip, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import {
+import { AUCTION_MANAGERS,
   CUSTOMER_ROLES, CreateTeamUserSchema, NotificationPrefsSchema, type NotificationPrefs, STAFF_ROLES, UpdateTeamUserSchema, type CreateTeamUserInput, type UpdateTeamUserInput,
 } from '@telus/shared';
 import { CurrentPrincipal, Roles } from '../auth/decorators';
@@ -8,7 +8,7 @@ import type { Principal } from '../auth/principal';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { TeamService } from './team.service';
 
-const MANAGERS = ['super_admin', 'auction_manager'];
+const MANAGERS = AUCTION_MANAGERS;
 const Id = new ParseUUIDPipe();
 
 @Controller()

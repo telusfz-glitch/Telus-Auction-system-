@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Ip, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { CUSTOMER_ROLES, PlaceBidSchema, type PlaceBidInput } from '@telus/shared';
+import { CUSTOMER_BIDDERS, CUSTOMER_ROLES, PlaceBidSchema, type PlaceBidInput } from '@telus/shared';
 import { CurrentPrincipal, Roles } from '../auth/decorators';
 import type { Principal } from '../auth/principal';
 import { ZodValidationPipe } from '../common/zod.pipe';
@@ -13,7 +13,7 @@ export class BidsController {
 
   // Viewers are rejected by the guard; the service and Postgres RLS re-check independently.
   @Post('bids')
-  @Roles('customer_admin', 'customer_bidder')
+  @Roles(...CUSTOMER_BIDDERS)
   @Throttle({ default: { limit: 20, ttl: 10_000 } })
   async place(@CurrentPrincipal() p: Principal, @Body(new ZodValidationPipe(PlaceBidSchema)) body: PlaceBidInput, @Ip() ip: string) {
     const t0 = process.hrtime.bigint();

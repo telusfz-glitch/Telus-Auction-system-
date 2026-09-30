@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 export const STAFF_ROLES = ['super_admin', 'auction_manager', 'sales_manager', 'finance', 'view_only'] as const;
 export const CUSTOMER_ROLES = ['customer_admin', 'customer_bidder', 'customer_viewer'] as const;
+/** Role groups used by BOTH the API (authorisation) and the web app (what to show) — defined once so they cannot drift. */
+export const AUCTION_MANAGERS = ['super_admin', 'auction_manager'] as const;   // build and run auctions, customers, margins
+export const LIMIT_SETTERS = ['super_admin', 'finance'] as const;               // purchase limits, invoice settlement
+export const SECURITY_ADMINS = ['super_admin'] as const;                        // platform bid limits
+export const CUSTOMER_BIDDERS = ['customer_admin', 'customer_bidder'] as const; // may accept terms and bid
+/** Highest first: an identity holding several customer roles acts with the highest. */
+export const CUSTOMER_ROLE_RANK = ['customer_admin', 'customer_bidder', 'customer_viewer'] as const;
 export type StaffRole = (typeof STAFF_ROLES)[number];
 export type CustomerRole = (typeof CUSTOMER_ROLES)[number];
 

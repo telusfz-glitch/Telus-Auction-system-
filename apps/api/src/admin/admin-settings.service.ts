@@ -6,7 +6,6 @@ import type { PoolClient } from 'pg';
 import { AuditService } from '../audit/audit.service';
 import type { Principal } from '../auth/principal';
 import { ApiError } from '../common/api-error';
-import { mapPgError } from '../common/pg-errors';
 import { DbService } from '../db/db.service';
 
 const money = (n: number) => n.toFixed(2);
@@ -17,14 +16,10 @@ const SEC_COLS = 'max_bid_limit, range_enabled, range_min, range_max, updated_at
 export class AdminSettingsService {
   constructor(private readonly db: DbService, private readonly audit: AuditService) {}
 
-  private run<T>(p: Principal, fn: (c: PoolClient) => Promise<T>): Promise<T> {
-    return this.db.withPrincipal(p, fn).catch((e) => { throw mapPgError(e); });
-  }
-
   // ---------------- customers ----------------
 
   updateCustomer(p: Principal, id: string, input: UpdateCustomerInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const before = (await c.query('SELECT id, status, margin_rule_set_id FROM customers WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!before) throw new ApiError('CUSTOMER_NOT_FOUND', 'Customer not found.', 404);
       const after = (await c.query(
@@ -40,7 +35,7 @@ export class AdminSettingsService {
 
   /** Purchasing capacity. 0 means the customer cannot bid at all. */
   setLimit(p: Principal, id: string, input: SetCustomerLimitInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const exists = (await c.query('SELECT 1 FROM customers WHERE id = $1', [id])).rowCount;
       if (!exists) throw new ApiError('CUSTOMER_NOT_FOUND', 'Customer not found.', 404);
       const before = (await c.query('SELECT max_purchase_value::text AS v FROM customer_limits WHERE customer_id = $1', [id])).rows[0];
@@ -57,7 +52,7 @@ export class AdminSettingsService {
   // ---------------- margin rule sets ----------------
 
   listRuleSets(p: Principal) {
-    return this.run(p, async (c) => (await c.query(
+    return this.db.run(p, async (c) => (await c.query(
       `SELECT s.id, s.name, s.created_at,
               coalesce(json_agg(json_build_object('priceFrom', b.price_from::text, 'priceTo', b.price_to::text, 'margin', b.margin::text)
                        ORDER BY b.price_from) FILTER (WHERE b.id IS NOT NULL), '[]') AS brackets,
@@ -67,7 +62,7 @@ export class AdminSettingsService {
   }
 
   createRuleSet(p: Principal, input: CreateMarginRuleSetInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const set = (await c.query('INSERT INTO margin_rule_sets (name) VALUES ($1) RETURNING id, name', [input.name])).rows[0];
       await this.insertBrackets(c, set.id, input.brackets);
       await this.audit.record(c, { actor: p, action: 'margin_rules.create', referenceType: 'margin_rule_set', referenceId: set.id, after: input, ip });
@@ -78,7 +73,7 @@ export class AdminSettingsService {
   /** Replaces every bracket atomically. The database rejects overlapping brackets (exclusion constraint). Takes effect
    *  for the next bid of every customer on this set, including in live auctions. */
   replaceBrackets(p: Principal, id: string, input: BracketsInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const set = (await c.query('SELECT id, name FROM margin_rule_sets WHERE id = $1 FOR UPDATE', [id])).rows[0];
       if (!set) throw new ApiError('RULE_SET_NOT_FOUND', 'Margin rule set not found.', 404);
       const before = (await c.query('SELECT price_from::text, price_to::text, margin::text FROM margin_rule_brackets WHERE rule_set_id = $1 ORDER BY price_from', [id])).rows;
@@ -99,11 +94,11 @@ export class AdminSettingsService {
   // ---------------- platform security settings ----------------
 
   getSecurity(p: Principal) {
-    return this.run(p, async (c) => (await c.query(`SELECT ${SEC_COLS} FROM security_settings`)).rows[0]);
+    return this.db.run(p, async (c) => (await c.query(`SELECT ${SEC_COLS} FROM security_settings`)).rows[0]);
   }
 
   updateSecurity(p: Principal, input: UpdateSecuritySettingsInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const before = (await c.query(`SELECT ${SEC_COLS} FROM security_settings FOR UPDATE`)).rows[0];
       const after = (await c.query(
         `UPDATE security_settings SET max_bid_limit = coalesce($1, max_bid_limit), range_enabled = coalesce($2, range_enabled),

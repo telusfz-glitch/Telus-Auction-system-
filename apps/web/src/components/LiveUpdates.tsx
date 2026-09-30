@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { socketTicketAction } from '@/app/actions/customer';
+import { createRefreshScheduler } from '@/lib/refresh-scheduler';
 
 const MESSAGES: Record<string, (d: Record<string, unknown>, lots: Record<string, string>) => string | null> = {
   'lot.outbid': (d, lots) => `You were outbid on lot ${lots[String(d['lotId'])] ?? ''}.`,
@@ -29,8 +30,8 @@ export function LiveUpdates({ auctionId, lotNumbers }: { auctionId: string; lotN
   useEffect(() => {
     let socket: Socket | null = null;
     let cancelled = false;
-    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => router.refresh(), 150); };
+    // Price broadcasts reach every spectator: rate-limited per browser. Own-position and auction events stay prompt.
+    const refresh = createRefreshScheduler(() => router.refresh());
 
     (async () => {
       const first = await socketTicketAction();
@@ -50,7 +51,7 @@ export function LiveUpdates({ auctionId, lotNumbers }: { auctionId: string; lotN
       socket.on('connect', () => {
         setState('live');
         socket!.emit('auction.subscribe', { auctionId }, () => undefined);
-        refresh();   // catch up on anything missed while disconnected
+        refresh.urgent();   // catch up on anything missed while disconnected
       });
       socket.on('disconnect', (reason) => {
         setState('offline');
@@ -61,11 +62,11 @@ export function LiveUpdates({ auctionId, lotNumbers }: { auctionId: string; lotN
         if (data?.['auctionId'] !== auctionId) return;
         const msg = MESSAGES[event]?.(data, lots.current);
         if (msg) setNotice(msg);
-        refresh();
+        if (event === 'lot.price') refresh.broadcast(); else refresh.urgent();
       });
     })();
 
-    return () => { cancelled = true; clearTimeout(refreshTimer); socket?.close(); };
+    return () => { cancelled = true; refresh.cancel(); socket?.close(); };
   }, [auctionId, router]);
 
   return (

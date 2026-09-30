@@ -1,5 +1,5 @@
 import { HttpException, Injectable, Logger } from '@nestjs/common';
-import type { PlaceBidInput } from '@telus/shared';
+import { CUSTOMER_BIDDERS, type PlaceBidInput } from '@telus/shared';
 import { createHash } from 'crypto';
 import { isIP } from 'net';
 import type { PoolClient } from 'pg';
@@ -7,8 +7,8 @@ import { AuditService } from '../audit/audit.service';
 import type { Principal } from '../auth/principal';
 import { DbService } from '../db/db.service';
 import { fromCents, toCents } from './money';
+import { loadBrackets, minNextBid } from './pricing';
 
-const BIDDER_ROLES = ['customer_admin', 'customer_bidder'];
 
 export class BidRejected extends HttpException {
   constructor(
@@ -50,7 +50,7 @@ export class BidsService {
   }
 
   private async placeInTx(c: PoolClient, p: Principal, input: PlaceBidInput, ip?: string): Promise<PlacedBid> {
-    if (p.kind !== 'customer' || !p.customerId || !BIDDER_ROLES.includes(p.customerRole ?? '')) {
+    if (p.kind !== 'customer' || !p.customerId || !(CUSTOMER_BIDDERS as readonly string[]).includes(p.customerRole ?? '')) {
       throw new BidRejected('FORBIDDEN', 'You are not allowed to place bids.', 403);
     }
     const customerId = p.customerId;
@@ -103,17 +103,11 @@ export class BidsService {
     //    the customer lock (step 1) serialises this customer's own bids, and others can only LOWER this customer's
     //    exposure (by outbidding them elsewhere), which keeps the check conservative.
     const [brackets, seen] = await Promise.all([
-      c.query(
-        `SELECT b.price_from::text AS f, b.price_to::text AS t, b.margin::text AS m FROM margin_rule_brackets b
-           JOIN customers cu ON cu.margin_rule_set_id = b.rule_set_id WHERE cu.id = $1`, [customerId]),
-      c.query('SELECT highest_amount::text AS highest FROM lot_price_state($1)', [lot.id]),
-    ].map((q) => q.then((r) => r.rows)));
-    const minNextAt = (highest: string | undefined) => {
-      if (highest === undefined) return toCents(lot.starting_price);
-      const h = toCents(highest);
-      const br = brackets.find((b) => h >= toCents(b.f) && h < toCents(b.t));
-      return h + toCents(br ? br.m : lot.fallback_increment);
-    };
+      loadBrackets(c, customerId),
+      c.query('SELECT highest_amount::text AS highest FROM lot_price_state($1)', [lot.id]).then((r) => r.rows),
+    ]);
+    const minNextAt = (highest: string | undefined) =>
+      minNextBid(highest === undefined ? null : toCents(highest), toCents(lot.starting_price), toCents(lot.fallback_increment), brackets);
     const tooLow = (minNext: bigint) =>
       new BidRejected('BID_TOO_LOW', 'Your bid is too low.', 422, auction.bid_visibility === 'full_price' ? { minNextBid: fromCents(minNext) } : {});
     // Early rejection without the lot lock: a lot's price only ever rises (the trigger accepts strictly higher bids
@@ -125,8 +119,10 @@ export class BidsService {
     const [limits, other] = await Promise.all([
       c.query('SELECT max_purchase_value::text AS v FROM customer_limits WHERE customer_id = $1', [customerId]),
       c.query(
+        // Joins auctions through lot_bid_state.auction_id (kept equal to the lot's by the bids FK) and uses
+        // lot_bid_state_leader_idx: ~2 ms at 50k lots instead of ~17 ms scanning every lot (docs/AUDIT.md, P2).
         `SELECT coalesce(sum(s.highest_amount * l.quantity), 0)::text AS total
-           FROM lot_bid_state s JOIN auction_lots l ON l.id = s.lot_id JOIN auctions au ON au.id = l.auction_id
+           FROM lot_bid_state s JOIN auctions au ON au.id = s.auction_id JOIN auction_lots l ON l.id = s.lot_id
           WHERE s.leader_customer_id = $1 AND s.lot_id <> $2 AND au.status IN ('live','closing','closed','under_review')`, [customerId, lot.id]),
     ].map((q) => q.then((r) => r.rows)));
     const capacity = toCents(limits[0] ? limits[0].v : '0');
@@ -187,27 +183,18 @@ export class BidsService {
            LEFT JOIN LATERAL (SELECT max(b.amount)::text AS amount FROM bids b WHERE b.lot_id = l.id AND b.customer_id = $2) mb ON true
            LEFT JOIN LATERAL lot_price_state(l.id) ps ON true
           WHERE l.auction_id = $1 ORDER BY l.lot_number`, [auctionId, p.customerId])).rows;
-      const brackets = (await c.query(
-        `SELECT b.price_from::text AS f, b.price_to::text AS t, b.margin::text AS m FROM margin_rule_brackets b
-           JOIN customers cu ON cu.margin_rule_set_id = b.rule_set_id WHERE cu.id = $1`, [p.customerId])).rows
-        .map((b) => ({ from: toCents(b.f), to: toCents(b.t), margin: toCents(b.m) }));
+      const brackets = await loadBrackets(c, p.customerId!);
       const fullPrice = auction.bid_visibility === 'full_price';
 
       return lots.map((l) => {
         const status = !l.my_highest_bid ? 'no_bid' : l.leader_is_me ? 'leading' : 'outbid';
         const knownPrice: string | null = fullPrice ? l.current_highest_bid : status === 'leading' ? l.my_highest_bid : null;
-        let minNextBid: string | null = null;
-        if (l.status === 'active' && (fullPrice || status === 'leading')) {
-          if (knownPrice === null) minNextBid = l.starting_price;
-          else {
-            const price = toCents(knownPrice);
-            const br = brackets.find((b) => price >= b.from && price < b.to);
-            minNextBid = fromCents(price + (br ? br.margin : toCents(l.fallback)));
-          }
-        }
+        const next = l.status === 'active' && (fullPrice || status === 'leading')
+          ? fromCents(minNextBid(knownPrice === null ? null : toCents(knownPrice), toCents(l.starting_price), toCents(l.fallback), brackets))
+          : null;
         return {
           lotId: l.lot_id, lotStatus: l.status, status, myHighestBid: l.my_highest_bid ?? null,
-          currentHighestBid: l.current_highest_bid ?? null, minNextBid,
+          currentHighestBid: l.current_highest_bid ?? null, minNextBid: next,
         };
       });
     });

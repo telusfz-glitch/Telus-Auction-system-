@@ -218,7 +218,9 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
-  # Floods from one address (the API also limits per signed-in user; see README step 10).
+  # Floods from one address (the API also limits per signed-in user; see README step 10). Our own services are exempt:
+  # every customer's API calls (and token refreshes) leave the web tasks through the NAT gateways, so counted per
+  # address they would all share one budget and a busy auction would get every customer blocked at once.
   rule {
     name     = "rate-per-ip"
     priority = 30
@@ -229,6 +231,15 @@ resource "aws_wafv2_web_acl" "main" {
       rate_based_statement {
         limit              = 3000 # requests per 5 minutes per IP
         aggregate_key_type = "IP"
+        scope_down_statement {
+          not_statement {
+            statement {
+              ip_set_reference_statement {
+                arn = aws_wafv2_ip_set.own_egress.arn
+              }
+            }
+          }
+        }
       }
     }
     visibility_config {
@@ -248,4 +259,12 @@ resource "aws_wafv2_web_acl" "main" {
 resource "aws_wafv2_web_acl_association" "alb" {
   resource_arn = aws_lb.main.arn
   web_acl_arn  = aws_wafv2_web_acl.main.arn
+}
+
+# The NAT gateways' public addresses: all outbound traffic of the ECS tasks (web → API, web/API → Keycloak).
+resource "aws_wafv2_ip_set" "own_egress" {
+  name               = "${local.name}-own-egress"
+  scope              = "REGIONAL"
+  ip_address_version = "IPV4"
+  addresses          = [for e in aws_eip.nat : "${e.public_ip}/32"]
 }

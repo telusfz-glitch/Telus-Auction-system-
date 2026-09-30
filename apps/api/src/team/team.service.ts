@@ -4,7 +4,6 @@ import type { PoolClient } from 'pg';
 import { AuditService } from '../audit/audit.service';
 import type { Principal } from '../auth/principal';
 import { ApiError } from '../common/api-error';
-import { mapPgError } from '../common/pg-errors';
 import { DbService } from '../db/db.service';
 import { KeycloakAdmin } from '../identity/keycloak-admin';
 
@@ -21,10 +20,6 @@ export class TeamService {
   private readonly logger = new Logger(TeamService.name);
   constructor(private readonly db: DbService, private readonly audit: AuditService, private readonly kc: KeycloakAdmin) {}
 
-  private run<T>(p: Principal, fn: (c: PoolClient) => Promise<T>): Promise<T> {
-    return this.db.withPrincipal(p, fn).catch((e) => { throw mapPgError(e); });
-  }
-
   /** Customers act on their own company only; staff name the company explicitly. */
   private customerOf(p: Principal, customerId?: string): string {
     if (p.kind === 'customer') {
@@ -37,13 +32,13 @@ export class TeamService {
 
   list(p: Principal, customerId?: string) {
     const cid = p.kind === 'customer' ? p.customerId! : this.customerOf(p, customerId);
-    return this.run(p, async (c) => (await c.query(`SELECT ${COLS} FROM customer_users WHERE customer_id = $1 ORDER BY created_at`, [cid])).rows);
+    return this.db.run(p, async (c) => (await c.query(`SELECT ${COLS} FROM customer_users WHERE customer_id = $1 ORDER BY created_at`, [cid])).rows);
   }
 
   async create(p: Principal, input: CreateTeamUserInput, customerId?: string, ip?: string) {
     const cid = this.customerOf(p, customerId);
     // Existence check under RLS first: staff get 404 for an unknown customer, customers can only ever reach their own.
-    await this.run(p, async (c) => {
+    await this.db.run(p, async (c) => {
       if (!(await c.query('SELECT 1 FROM customers WHERE id = $1', [cid])).rowCount) throw new ApiError('CUSTOMER_NOT_FOUND', 'Customer not found.', 404);
       if ((await c.query('SELECT 1 FROM customer_users WHERE lower(email) = lower($1)', [input.email])).rowCount) {
         throw new ApiError('EMAIL_UNAVAILABLE', 'This email address cannot be used for a new login.', 409);
@@ -51,7 +46,7 @@ export class TeamService {
     });
     const { id: sub, temporaryPassword } = await this.kc.createCustomerUser({ ...input, customerId: cid });
     try {
-      const row = await this.run(p, async (c) => {
+      const row = await this.db.run(p, async (c) => {
         const r = (await c.query(
           `INSERT INTO customer_users (customer_id, keycloak_sub, email, display_name, role, created_by)
            VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${COLS}`,
@@ -70,7 +65,7 @@ export class TeamService {
   }
 
   update(p: Principal, userId: string, input: UpdateTeamUserInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const row = (await c.query(`SELECT ${COLS} FROM customer_users WHERE id = $1 FOR UPDATE`, [userId])).rows[0];
       if (!row) throw new ApiError('USER_NOT_FOUND', 'User not found.', 404);
       const cid = this.customerOf(p, row.customer_id);
@@ -101,7 +96,7 @@ export class TeamService {
 
   /** The signed-in login's own preferences. RLS (cu_self_prefs) plus the row guard confine the update to this one column of this one row. */
   getPrefs(p: Principal): Promise<NotificationPrefs> {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const r = (await c.query('SELECT notify_outbid FROM customer_users WHERE keycloak_sub = $1 AND customer_id = $2', [p.sub, p.customerId])).rows[0];
       if (!r) throw new ApiError('USER_NOT_FOUND', 'No team record exists for this login.', 404);
       return { notifyOutbid: r.notify_outbid };
@@ -109,7 +104,7 @@ export class TeamService {
   }
 
   setPrefs(p: Principal, input: NotificationPrefs, ip?: string): Promise<NotificationPrefs> {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const r = (await c.query(
         'UPDATE customer_users SET notify_outbid = $3 WHERE keycloak_sub = $1 AND customer_id = $2 RETURNING id, notify_outbid',
         [p.sub, p.customerId, input.notifyOutbid])).rows[0];

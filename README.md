@@ -385,6 +385,14 @@ Container images and infrastructure-as-code for staging and production — full 
   non-superuser owner (closes gap 4). `backup.sh` uploads to S3 when `BACKUP_S3_URI` is set.
 - Not yet done: a real `terraform apply` in an AWS account (needs the account, a domain and a certificate).
 
+## Security, code and performance audit (step 17)
+Full report: [`docs/AUDIT.md`](docs/AUDIT.md). No critical vulnerability found. Fixed: the AWS firewall rate limit would have
+blocked **all** customers at once during a busy auction (all API traffic comes from the web servers' shared address); bids
+and audit entries now record the customer's real address (forwarded with a secret shared by web app and API,
+`CLIENT_IP_FORWARD_SECRET`); live auction pages no longer re-render on every price change for every spectator; the per-bid
+purchase-limit check is ~9× faster at 50,000 lots (migration 013); the minimum-next-bid rule and the role groups are
+defined once. Accepted/business items (Excel import size, price probing in hidden-price auctions) are explained there.
+
 ## Decisions recorded
 - Purchase limits do **not** count unpaid invoices (owner's decision, 2026-09-29) — gap 7 is by design.
 - Suspending a customer company stops its bids at once but does **not** sign its users out (owner's decision, 2026-09-29) —

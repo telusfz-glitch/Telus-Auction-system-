@@ -1,5 +1,5 @@
 import { jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
-import { CUSTOMER_ROLES, STAFF_ROLES } from '@telus/shared';
+import { CUSTOMER_ROLES, CUSTOMER_ROLE_RANK, STAFF_ROLES } from '@telus/shared';
 import type { Principal } from './principal';
 
 /** Token is bad/expired/forged → HTTP 401. Reason is never sent to the client. */
@@ -10,7 +10,6 @@ export class ForbiddenPrincipalError extends Error {}
 export class MfaRequiredError extends ForbiddenPrincipalError {}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CUSTOMER_ROLE_RANK = ['customer_admin', 'customer_bidder', 'customer_viewer'];
 
 export interface TokenVerifierOptions {
   issuer: string;

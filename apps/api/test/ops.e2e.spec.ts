@@ -21,6 +21,7 @@ if (!enabled && process.env.REQUIRE_DB_TESTS) {
 const id = (n: number) => `0b0b0b0b-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const CU = id(1), AU = id(101), LOT = id(201);
 const TOKEN = 'metrics-test-token-0123456789abcdef-0123';
+const FORWARD_KEY = 'client-ip-forward-test-key-0123456789abcdef';
 
 (enabled ? describe : describe.skip)('Operations endpoints — readiness and Prometheus metrics (real AppModule, real Postgres)', () => {
   let app: INestApplication, admin: Pool, priv: KeyLike;
@@ -43,7 +44,7 @@ const TOKEN = 'metrics-test-token-0123456789abcdef-0123';
     priv = keys.privateKey;
     Object.assign(process.env, {
       NODE_ENV: 'test', DATABASE_URL: APP_URL, KEYCLOAK_ISSUER: ISS, API_AUDIENCE: AUD, CORS_ORIGINS: 'https://auction.telus.ae',
-      WORKERS_ENABLED: 'false', METRICS_TOKEN: TOKEN,
+      WORKERS_ENABLED: 'false', METRICS_TOKEN: TOKEN, CLIENT_IP_FORWARD_SECRET: FORWARD_KEY,
     });
     const mod = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(TokenVerifier).useValue(new TokenVerifier({ issuer: ISS, audience: AUD, getKey: async () => keys.publicKey }))
@@ -52,9 +53,21 @@ const TOKEN = 'metrics-test-token-0123456789abcdef-0123';
     await configureApp(app, loadEnv());
     await app.init();
   });
-  afterAll(async () => { await app?.close(); await admin?.end(); delete process.env.METRICS_TOKEN; });
+  afterAll(async () => { await app?.close(); await admin?.end(); delete process.env.METRICS_TOKEN; delete process.env.CLIENT_IP_FORWARD_SECRET; });
 
   it('readiness is 200 when the database answers', () => http().get('/health/ready').expect(200, { ok: true }));
+
+  it('a flood of readiness checks costs one database round trip, not one per request', async () => {
+    await new Promise((r) => setTimeout(r, 2100));   // let the previous test's cached result expire
+    const spy = jest.spyOn(app.get(DbService), 'withSystem');
+    try {
+      const res = await Promise.all(Array.from({ length: 50 }, () => http().get('/health/ready')));
+      expect(res.every((r) => r.status === 200)).toBe(true);
+      expect(spy.mock.calls.filter(([worker]) => worker === 'ready')).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 
   it('/metrics answers only to the scrape token; a wrong token looks exactly like "metrics off"', async () => {
     await http().get('/metrics').expect(404);
@@ -82,6 +95,23 @@ const TOKEN = 'metrics-test-token-0123456789abcdef-0123';
     const audited = (await admin.query('SELECT count(*)::int AS n FROM audit_logs')).rows[0].n;
     expect(audited).toBeGreaterThanOrEqual(1);
     expect(line(text, 'telus_backlog{what="audit_unshipped_rows"}')).toBe(`telus_backlog{what="audit_unshipped_rows"} ${audited}`);
+  });
+
+  it('records the end user\'s address forwarded by the web app — only with the shared key, never a client-chosen one', async () => {
+    const tok = await signToken(priv, customerClaims('customer_bidder', CU), { sub: 'ops-bidder' });
+    const bid = (amount: number, key: string, headers: Record<string, string>) =>
+      http().post('/bids').set('Authorization', `Bearer ${tok}`).set(headers).send({ lotId: LOT, amount, idempotencyKey: key }).expect(201);
+    await bid(200, '33333333-3333-4333-8333-333333333333', { 'x-telus-client-ip': '203.0.113.7', 'x-telus-client-ip-key': FORWARD_KEY });
+    await bid(300, '44444444-4444-4444-8444-444444444444', { 'x-telus-client-ip': '198.51.100.9', 'x-telus-client-ip-key': `${FORWARD_KEY}x` });
+    await bid(400, '55555555-5555-4555-8555-555555555555', { 'x-telus-client-ip': 'not-an-ip', 'x-telus-client-ip-key': FORWARD_KEY });
+    let ips: Record<string, string | null> = {};
+    await asStaff(admin, async (c) => {
+      ips = Object.fromEntries((await c.query('SELECT amount::int::text AS a, host(ip) AS ip FROM bids WHERE amount >= 200')).rows.map((r) => [r.a, r.ip]));
+    });
+    expect(ips['200']).toBe('203.0.113.7');                 // forwarded with the right key
+    expect(ips['300']).not.toBe('198.51.100.9');            // wrong key: the header is ignored
+    expect(ips['400']).not.toBe('not-an-ip');
+    expect(ips['300']).toMatch(/127\.0\.0\.1|::1/);        // the direct peer instead
   });
 
   it('ops_metrics() is for the system context only', async () => {

@@ -3,6 +3,7 @@ import { Pool, type PoolClient } from 'pg';
 import { ENV } from '../config/tokens';
 import type { Env } from '../config/env';
 import type { Principal } from '../auth/principal';
+import { mapPgError } from '../common/pg-errors';
 
 @Injectable()
 export class DbService implements OnModuleDestroy {
@@ -23,6 +24,11 @@ export class DbService implements OnModuleDestroy {
     return this.inContext([p.kind, p.customerId ?? '', p.customerRole ?? '', p.sub], fn);
   }
 
+  /** withPrincipal for request handlers: database refusals (constraints, guard triggers) become client-safe API errors. */
+  run<T>(p: Principal, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.withPrincipal(p, fn).catch((e) => { throw mapPgError(e); });
+  }
+
   /**
    * For background workers only (scheduler, outbox publisher) — never reachable from a request. The 'system'
    * context can read lots and bids and call the owner-run lifecycle/outbox functions (see 003_lifecycle.sql);
@@ -34,6 +40,7 @@ export class DbService implements OnModuleDestroy {
 
   private async inContext<T>(ctx: [string, string, string, string], fn: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
+    let broken: Error | undefined;
     try {
       await client.query('BEGIN');
       await client.query(
@@ -45,10 +52,12 @@ export class DbService implements OnModuleDestroy {
       await client.query('COMMIT');
       return result;
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => undefined);
+      // A connection whose ROLLBACK fails (e.g. it was cut mid-transaction) must not go back to the pool, where the next
+      // request would receive it with an unknown transaction state: release(error) destroys it instead.
+      await client.query('ROLLBACK').catch((e: Error) => { broken = e; });
       throw err;
     } finally {
-      client.release();
+      client.release(broken);
     }
   }
 

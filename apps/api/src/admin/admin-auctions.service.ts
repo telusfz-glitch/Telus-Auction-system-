@@ -4,7 +4,6 @@ import type { PoolClient } from 'pg';
 import { AuditService } from '../audit/audit.service';
 import type { Principal } from '../auth/principal';
 import { ApiError } from '../common/api-error';
-import { mapPgError } from '../common/pg-errors';
 import { DbService } from '../db/db.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 
@@ -33,10 +32,6 @@ const LOT_FIELDS: Record<keyof UpdateLotInput, [string, (v: never) => unknown]> 
 export class AdminAuctionsService {
   constructor(private readonly db: DbService, private readonly audit: AuditService, private readonly realtime: RealtimeGateway) {}
 
-  private run<T>(p: Principal, fn: (c: PoolClient) => Promise<T>): Promise<T> {
-    return this.db.withPrincipal(p, fn).catch((e) => { throw mapPgError(e); });
-  }
-
   private async lockAuction(c: PoolClient, id: string) {
     const a = (await c.query(`SELECT ${AUCTION_COLS} FROM auctions WHERE id = $1 FOR UPDATE`, [id])).rows[0];
     if (!a) throw new ApiError('AUCTION_NOT_FOUND', 'Auction not found.', 404);
@@ -50,7 +45,7 @@ export class AdminAuctionsService {
   // ---------------- auctions ----------------
 
   list(p: Principal) {
-    return this.run(p, async (c) => (await c.query(
+    return this.db.run(p, async (c) => (await c.query(
       `SELECT a.id, a.number, a.name, a.status, a.start_at, a.close_at, a.bid_visibility,
               (SELECT count(*)::int FROM auction_lots l WHERE l.auction_id = a.id) AS lot_count,
               (SELECT count(*)::int FROM auction_participants ap WHERE ap.auction_id = a.id AND ap.is_allowed) AS participant_count
@@ -58,7 +53,7 @@ export class AdminAuctionsService {
   }
 
   get(p: Principal, id: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const auction = (await c.query(`SELECT ${AUCTION_COLS} FROM auctions WHERE id = $1`, [id])).rows[0];
       if (!auction) throw new ApiError('AUCTION_NOT_FOUND', 'Auction not found.', 404);
       const lots = (await c.query(
@@ -75,7 +70,7 @@ export class AdminAuctionsService {
   }
 
   create(p: Principal, input: CreateAuctionInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const row = (await c.query(
         `INSERT INTO auctions (number, name, status, start_at, close_at, bid_visibility, extension_enabled, extension_window_seconds, extension_seconds)
          VALUES ($1,$2,'draft',$3,$4,$5,$6,$7,$8) RETURNING ${AUCTION_COLS}`,
@@ -87,7 +82,7 @@ export class AdminAuctionsService {
   }
 
   update(p: Principal, id: string, input: UpdateAuctionInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const before = await this.lockAuction(c, id);
       this.requireStatus(before, EDITABLE);
       const keys = Object.keys(input) as Array<keyof UpdateAuctionInput>;
@@ -102,7 +97,7 @@ export class AdminAuctionsService {
 
   /** draft → scheduled. The scheduler takes it live at start_at (immediately, if that is already past). */
   schedule(p: Principal, id: string, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const a = await this.lockAuction(c, id);
       this.requireStatus(a, ['draft']);
       const check = (await c.query(
@@ -117,7 +112,7 @@ export class AdminAuctionsService {
   }
 
   unschedule(p: Principal, id: string, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const a = await this.lockAuction(c, id);
       this.requireStatus(a, ['scheduled']);
       return this.setStatus(c, p, a, 'draft', ip);
@@ -126,7 +121,7 @@ export class AdminAuctionsService {
 
   /** Cancelling a LIVE auction first takes the auction lock exclusively (like the closer), so no bid is mid-flight. */
   cancel(p: Principal, id: string, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       await c.query('SELECT pg_advisory_xact_lock(auction_lock_key($1))', [id]);
       const a = await this.lockAuction(c, id);
       this.requireStatus(a, ['draft', 'scheduled', 'live']);
@@ -143,7 +138,7 @@ export class AdminAuctionsService {
   // ---------------- lots ----------------
 
   addLots(p: Principal, auctionId: string, input: CreateLotsInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const a = await this.lockAuction(c, auctionId);
       this.requireStatus(a, EDITABLE);
       const rows = (await c.query(
@@ -167,7 +162,7 @@ export class AdminAuctionsService {
   }
 
   updateLot(p: Principal, lotId: string, input: UpdateLotInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const { lot, auction } = await this.lockLot(c, lotId);
       this.requireStatus(auction, EDITABLE);
       const keys = Object.keys(input) as Array<keyof UpdateLotInput>;
@@ -180,7 +175,7 @@ export class AdminAuctionsService {
   }
 
   deleteLot(p: Principal, lotId: string, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const { lot, auction } = await this.lockLot(c, lotId);
       this.requireStatus(auction, EDITABLE);
       await c.query('DELETE FROM auction_lots WHERE id = $1', [lotId]);
@@ -191,7 +186,7 @@ export class AdminAuctionsService {
 
   /** Allowed up to and including LIVE. Bids already placed stay in the ledger; the lot is allocated as 'withdrawn'. */
   withdrawLot(p: Principal, lotId: string, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const { lot, auction } = await this.lockLot(c, lotId);
       this.requireStatus(auction, ['draft', 'scheduled', 'live']);
       if (lot.status === 'withdrawn') return lot;
@@ -205,7 +200,7 @@ export class AdminAuctionsService {
 
   /** Invites (or re-admits) customers. Terms acceptance is kept: a re-admitted customer does not have to accept again. */
   invite(p: Principal, auctionId: string, input: InviteCustomersInput, ip?: string) {
-    return this.run(p, async (c) => {
+    return this.db.run(p, async (c) => {
       const a = await this.lockAuction(c, auctionId);
       this.requireStatus(a, INVITABLE);
       const ids = [...new Set(input.customerIds.map((x) => x.toLowerCase()))];
@@ -222,7 +217,7 @@ export class AdminAuctionsService {
   /** Revokes (never deletes: the row is evidence of who was invited, and bids may reference the auction). After the
    *  commit, the customer's open sockets are pulled out of the auction's realtime room. */
   async revoke(p: Principal, auctionId: string, customerId: string, ip?: string) {
-    const result = await this.run(p, async (c) => {
+    const result = await this.db.run(p, async (c) => {
       const a = await this.lockAuction(c, auctionId);
       this.requireStatus(a, INVITABLE);
       const r = await c.query('UPDATE auction_participants SET is_allowed = false WHERE auction_id = $1 AND customer_id = $2 AND is_allowed', [auctionId, customerId]);
