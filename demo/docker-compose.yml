@@ -1,0 +1,113 @@
+# One-command local demo:  docker compose -f demo/docker-compose.yml up --build
+# Then open http://localhost:3000 (sign-in accounts in demo/README.md) and http://localhost:8025 for the e-mails.
+# DEMO ONLY: fixed, public passwords and plain http. Never use this file for a real deployment (see infra/aws).
+name: telus-demo
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: telus_owner
+      POSTGRES_PASSWORD: demo-owner-pw
+      POSTGRES_DB: telus
+      APP_DB_PASSWORD: demo-app-pw
+      KEYCLOAK_DB_PASSWORD: demo-keycloak-pw
+      BACKUP_DB_PASSWORD: demo-backup-pw
+    volumes:
+      - demo-pg:/var/lib/postgresql/data
+      - ../infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telus_owner -d telus"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "demo-redis-pw"]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: demo-keycloak-pw
+      KC_BOOTSTRAP_ADMIN_USERNAME: kcadmin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: demo-kcadmin-pw
+      TELUS_WEB_URL: http://localhost:3000
+      TELUS_WEB_CLIENT_SECRET: demo-web-client-secret-0123456789
+      TELUS_API_ADMIN_CLIENT_SECRET: demo-api-admin-secret-0123456789
+    volumes:
+      - ../infra/keycloak/telus-realm.json:/opt/keycloak/data/import/telus-realm.json:ro
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # Catches every e-mail the platform sends (outbid alerts, results, invoices): http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["127.0.0.1:8025:8025"]
+
+  # Runs once: migrations, demo customers and auctions, demo logins.
+  setup:
+    build: { context: .., dockerfile: apps/api/Dockerfile, target: runtime }
+    image: telus-demo-api
+    command: ["node", "/demo/seed.cjs"]
+    environment:
+      OWNER_DATABASE_URL: postgres://telus_owner:demo-owner-pw@postgres:5432/telus
+      KC_URL: http://keycloak:8080
+      KC_ADMIN: kcadmin
+      KC_ADMIN_PASSWORD: demo-kcadmin-pw
+      DEMO_PASSWORD: Demo-Passw0rd!2026
+    volumes: ["./:/demo:ro"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      keycloak: { condition: service_started }
+    restart: "no"
+
+  api:
+    image: telus-demo-api
+    pull_policy: never                    # built by the setup service above
+    command: ["sh", "-c", "node /demo/localhost-forward.cjs 8080 keycloak:8080 & exec node apps/api/dist/main.js"]
+    environment:
+      NODE_ENV: development               # allows the plain-http Keycloak address used by this demo
+      PORT: "4000"
+      DATABASE_URL: postgres://telus_app:demo-app-pw@postgres:5432/telus
+      KEYCLOAK_ISSUER: http://localhost:8080/realms/telus
+      KEYCLOAK_ADMIN_CLIENT_SECRET: demo-api-admin-secret-0123456789
+      CORS_ORIGINS: http://localhost:3000
+      REDIS_URL: redis://:demo-redis-pw@redis:6379/0
+      RATE_LIMIT_REDIS_URL: redis://:demo-redis-pw@redis:6379/1
+      REALTIME_TICKET_SECRET: demo-realtime-ticket-secret-0123456789abcdef
+      SMTP_URL: smtp://mailpit:1025
+      MAIL_FROM: TELUS Auctions (demo) <no-reply@auctions.telus.test>
+      PUBLIC_WEB_URL: http://localhost:3000
+    volumes: ["./:/demo:ro"]
+    ports: ["127.0.0.1:4000:4000"]
+    depends_on:
+      setup: { condition: service_completed_successfully }
+      redis: { condition: service_started }
+
+  web:
+    build: { context: .., dockerfile: apps/web/Dockerfile }
+    image: telus-demo-web
+    command: ["sh", "-c", "node /demo/localhost-forward.cjs 8080 keycloak:8080 & exec node apps/web/server.js"]
+    environment:
+      WEB_URL: http://localhost:3000
+      OIDC_ISSUER: http://localhost:8080/realms/telus
+      OIDC_CLIENT_ID: telus-web
+      OIDC_CLIENT_SECRET: demo-web-client-secret-0123456789
+      API_URL: http://api:4000
+      API_PUBLIC_URL: http://localhost:4000
+      REDIS_URL: redis://:demo-redis-pw@redis:6379/2
+      SESSION_SECRET: demo-session-secret-0123456789abcdef-0123456789
+      ALLOW_HTTP_FOR_LOCAL_TESTING: "true"   # plain http on localhost; never on a real deployment
+    volumes: ["./:/demo:ro"]
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      api: { condition: service_started }
+
+volumes:
+  demo-pg:

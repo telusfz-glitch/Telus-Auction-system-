@@ -44,6 +44,11 @@ infra/postgres/init/ creates the restricted `telus_app` runtime role
 docker-compose.yml   Postgres 16, Redis 7, Keycloak 26 (127.0.0.1 only, no default secrets)
 ```
 
+## Try it (one command, on your own computer)
+`docker compose -f demo/docker-compose.yml up --build`, then open http://localhost:3000 — demo logins, a live auction and an
+e-mail viewer are included. Step-by-step for non-developers: [`demo/README.md`](demo/README.md). Demo passwords are public;
+never use it for real customers.
+
 ## Run it
 ```bash
 scripts/gen-secrets.sh                 # random secrets → .env (mode 600); refuses to overwrite

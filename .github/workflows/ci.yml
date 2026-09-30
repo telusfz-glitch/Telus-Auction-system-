@@ -183,3 +183,25 @@ jobs:
         run: |
           python3 -m venv /tmp/ck && /tmp/ck/bin/pip install -q checkov==3.3.20
           /tmp/ck/bin/checkov -d . --framework terraform --quiet --compact
+
+  demo:
+    name: One-command demo (docker compose) — starts and signs in
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the demo exactly as demo/README.md says
+        run: docker compose -f demo/docker-compose.yml up -d --build
+      - name: Setup finished, app answers, Sign in reaches the login page
+        run: |
+          for i in $(seq 1 90); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 2; done
+          docker compose -f demo/docker-compose.yml logs setup | tail -15
+          docker compose -f demo/docker-compose.yml logs setup | grep -q 'Demo ready'
+          curl -sf http://localhost:4000/health
+          # The web container must reach Keycloak at the browser's address (localhost:8080) to build the sign-in redirect.
+          loc=$(curl -s -o /dev/null -w '%{redirect_url}' http://localhost:3000/auth/login)
+          echo "sign-in redirects to: $loc"
+          case "$loc" in http://localhost:8080/realms/telus/protocol/openid-connect/auth*) ;; *) exit 1;; esac
+          curl -sf -o /dev/null "$loc" && echo "login page OK"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f demo/docker-compose.yml logs --tail 80
