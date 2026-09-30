@@ -21,7 +21,7 @@ This is an internal review, not a substitute for the third-party penetration tes
 | C2 | Code | Low | Role groups repeated in 8 places across API and web app | Fixed (shared package) |
 | C3 | Code | Low | Four copies of the same database helper | Fixed |
 | S5 | Security | Low | Excel import could be a "zip bomb" (staff-only) | Fixed (follow-up) |
-| S6 | Security | Info | Price probing through "bid too low" in hidden-price auctions | Business decision |
+| S6 | Security | Info | Price probing through "bid too low" in hidden-price auctions | Accepted by the owner (30 Sep) |
 | S7 | Security | Info | Access tokens live ≤5 min after a login is suspended | Known (README gap 6) |
 
 No critical vulnerability was found: no injection, no broken access control, no authentication bypass.

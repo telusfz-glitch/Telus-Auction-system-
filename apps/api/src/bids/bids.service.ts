@@ -103,7 +103,7 @@ export class BidsService {
     //    the customer lock (step 1) serialises this customer's own bids, and others can only LOWER this customer's
     //    exposure (by outbidding them elsewhere), which keeps the check conservative.
     const [brackets, seen] = await Promise.all([
-      loadBrackets(c, customerId),
+      loadBrackets(c, customerId, lot.auction_id),
       c.query('SELECT highest_amount::text AS highest FROM lot_price_state($1)', [lot.id]).then((r) => r.rows),
     ]);
     const minNextAt = (highest: string | undefined) =>
@@ -184,7 +184,7 @@ export class BidsService {
            LEFT JOIN auction_lot_positions($1) ps ON ps.lot_id = l.id
            LEFT JOIN LATERAL (SELECT max(b.amount)::text AS amount FROM bids b WHERE b.lot_id = l.id AND b.customer_id = $2) mb ON true
           WHERE l.auction_id = $1 ORDER BY l.lot_number`, [auctionId, p.customerId])).rows;
-      const brackets = await loadBrackets(c, p.customerId!);
+      const brackets = await loadBrackets(c, p.customerId!, auctionId);
       const fullPrice = auction.bid_visibility === 'full_price';
 
       return lots.map((l) => {

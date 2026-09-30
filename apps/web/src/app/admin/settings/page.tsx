@@ -27,7 +27,7 @@ export default async function Settings() {
       </div>
 
       <h2>Margin rule sets</h2>
-      <p className="muted">Minimum increment by current price. Changes apply to the next bid, including in live auctions.</p>
+      <p className="muted">Minimum increment by current price. Each auction keeps the brackets its customers had when it was scheduled: changes here apply to auctions scheduled afterwards, never to one already scheduled or running.</p>
       <div className="grid2">
         {ruleSets.map((r) => (
           <div key={r.id} className="panel">

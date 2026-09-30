@@ -215,4 +215,61 @@ const soon = (s: number) => new Date(Date.now() + s * 1000).toISOString();
     const ev = (await admin.query("SELECT payload FROM outbox_events WHERE type = 'auction.cancelled'")).rows;
     expect(ev).toEqual([{ payload: { auctionId, status: 'cancelled', previousStatus: 'live' } }]);
   });
+
+  it('margin brackets are frozen per auction at scheduling: later rule changes only affect auctions scheduled afterwards', async () => {
+    const set = await mgr().post('/admin/margin-rule-sets', { name: 'freeze-test', brackets: [{ priceFrom: 0, priceTo: 100000, margin: 10 }] }).expect(201);
+    await mgr().patch(`/admin/customers/${CU.B}`, { status: 'active', marginRuleSetId: set.body.id }).expect(200);
+    await as('finance').put(`/admin/customers/${CU.B}/limits`, { maxPurchaseValue: 1000000 }).expect(200);
+    const makeAuction = async (number: string) => {
+      const a = (await mgr().post('/admin/auctions', { number, name: number, startAt: soon(1), closeAt: soon(3600), bidVisibility: 'full_price' }).expect(201)).body.id as string;
+      const lot = (await mgr().post(`/admin/auctions/${a}/lots`, { lots: [{ lotNumber: 'F1', description: 'freeze', quantity: 1, startingPrice: 100 }] }).expect(201)).body[0].id as string;
+      await mgr().post(`/admin/auctions/${a}/participants`, { customerIds: [CU.B] }).expect(200);
+      await mgr().post(`/admin/auctions/${a}/schedule`).expect(200);
+      return { a, lot };
+    };
+    const minNext = async (a: string) => (await as('custB').get(`/auctions/${a}/my-positions`).expect(200)).body[0].minNextBid;
+    const bid = (lot: string, amount: number, key: string) =>
+      http().post('/bids').set('Authorization', `Bearer ${tokens.custB}`).send({ lotId: lot, amount, idempotencyKey: key });
+
+    const first = await makeAuction('AUC-FRZ-1');                 // scheduled with margin 10
+    await mgr().put(`/admin/margin-rule-sets/${set.body.id}/brackets`, { brackets: [{ priceFrom: 0, priceTo: 100000, margin: 50 }] }).expect(200);
+    const second = await makeAuction('AUC-FRZ-2');                // scheduled after the change: margin 50
+    await new Promise((r) => setTimeout(r, 1100));
+    await lifecycle.tick();
+    for (const x of [first, second]) {
+      await as('custB').post(`/auctions/${x.a}/accept-terms`).expect(200);
+      await bid(x.lot, 100, `frz-${x.a.slice(-4)}-000000001`).expect(201);
+    }
+    expect(await minNext(first.a)).toBe('110.00');                // still the brackets it was scheduled with
+    expect(await minNext(second.a)).toBe('150.00');
+    const tooLow = await bid(first.lot, 105, 'frz-first-0000000002');
+    expect(tooLow.status).toBe(422);
+    expect(tooLow.body).toMatchObject({ code: 'BID_TOO_LOW', minNextBid: '110.00' });   // the engine enforces the frozen rule
+    await bid(first.lot, 110, 'frz-first-0000000003').expect(201);
+
+    // Re-assigning the company to another rule set does not reach a running auction either.
+    const other = await mgr().post('/admin/margin-rule-sets', { name: 'freeze-other', brackets: [{ priceFrom: 0, priceTo: 100000, margin: 1 }] }).expect(201);
+    await mgr().patch(`/admin/customers/${CU.B}`, { marginRuleSetId: other.body.id }).expect(200);
+    expect(await minNext(first.a)).toBe('120.00');
+
+    // Unscheduling drops the copy; scheduling again freezes the rules of that moment.
+    const third = await makeAuction('AUC-FRZ-3');
+    const frozen = async (a: string) => (await admin.query('SELECT brackets FROM auction_customer_rules WHERE auction_id = $1', [a])).rows;
+    expect((await frozen(third.a))[0].brackets).toEqual([{ f: '0.00', t: '100000.00', m: '1.00' }]);
+    await mgr().post(`/admin/auctions/${third.a}/unschedule`).expect(200);
+    expect(await frozen(third.a)).toEqual([]);
+    await mgr().put(`/admin/margin-rule-sets/${other.body.id}/brackets`, { brackets: [{ priceFrom: 0, priceTo: 100000, margin: 2 }] }).expect(200);
+    await mgr().post(`/admin/auctions/${third.a}/schedule`).expect(200);
+    expect((await frozen(third.a))[0].brackets).toEqual([{ f: '0.00', t: '100000.00', m: '2.00' }]);
+
+    // Only the database functions write the copy: the API role cannot, and only staff actions trigger a freeze.
+    await expect(asStaff(admin, (c) => c.query(`SELECT set_config('app.role','customer',true); SELECT freeze_auction_rules('${third.a}', '${CU.B}')`).then(() => undefined)))
+      .rejects.toThrow(/FREEZE_REQUIRES_STAFF/);
+    const { Pool: PgPool } = await import('pg');
+    const appPool = new PgPool({ connectionString: APP_URL });
+    try {
+      await expect(appPool.query(`SELECT freeze_auction_rules('${third.a}', '${CU.B}')`)).rejects.toThrow(/permission denied/);
+      await expect(appPool.query(`DELETE FROM auction_customer_rules`)).rejects.toThrow(/permission denied/);
+    } finally { await appPool.end(); }
+  });
 });

@@ -4,11 +4,17 @@ import { toCents } from './money';
 /** One margin bracket in cents: a price in [from, to) must be beaten by at least `margin`. */
 export interface Bracket { from: bigint; to: bigint; margin: bigint }
 
-/** The customer's own margin brackets (rule set assigned to their company), in cents. */
-export async function loadBrackets(c: PoolClient, customerId: string): Promise<Bracket[]> {
-  const { rows } = await c.query(
+/**
+ * The margin brackets that apply to this customer in this auction, in cents: the copy frozen when the auction was
+ * scheduled (or when the customer was invited to it later), so a rule change never alters a running auction
+ * (migration 015). Only an auction without a frozen copy (never scheduled) falls back to the company's current rule set.
+ */
+export async function loadBrackets(c: PoolClient, customerId: string, auctionId: string): Promise<Bracket[]> {
+  const frozen = (await c.query(
+    'SELECT brackets FROM auction_customer_rules WHERE auction_id = $1 AND customer_id = $2', [auctionId, customerId])).rows[0];
+  const rows: Array<{ f: string; t: string; m: string }> = frozen ? frozen.brackets : (await c.query(
     `SELECT b.price_from::text AS f, b.price_to::text AS t, b.margin::text AS m FROM margin_rule_brackets b
-       JOIN customers cu ON cu.margin_rule_set_id = b.rule_set_id WHERE cu.id = $1`, [customerId]);
+       JOIN customers cu ON cu.margin_rule_set_id = b.rule_set_id WHERE cu.id = $1`, [customerId])).rows;
   return rows.map((b) => ({ from: toCents(b.f), to: toCents(b.t), margin: toCents(b.m) }));
 }
 

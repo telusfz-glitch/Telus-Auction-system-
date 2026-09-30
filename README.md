@@ -396,6 +396,9 @@ prices appear instantly in full-price auctions, and oversized Excel archives are
 business item (price probing in hidden-price auctions) is explained there.
 
 ## Decisions recorded
+- Margin brackets are frozen per auction when it is scheduled (owner's decision, 2026-09-30) — see gap 8.
+- Team logins keep the temporary-password method; notifications stay email only, no SMS; no extra logging of repeated
+  "bid too low" attempts in hidden-price auctions beyond the rate limit (owner's decisions, 2026-09-30).
 - Purchase limits do **not** count unpaid invoices (owner's decision, 2026-09-29) — gap 7 is by design.
 - Suspending a customer company stops its bids at once but does **not** sign its users out (owner's decision, 2026-09-29) —
   gap 6 is by design; suspend individual logins to end their sessions.
@@ -480,8 +483,9 @@ through `docker compose exec`; the same admin operations were verified via the R
    end its users' sessions (suspend the logins too, or revoke the invitation, which evicts sockets at once).
 7. The exposure check stops counting an auction's lots once it is `finalized` (step-3 rule). If purchase limits should include
    unpaid invoices, count them explicitly.
-8. Changing a margin rule set takes effect on the next bid, including in live auctions. If brackets must be frozen per auction,
-   snapshot them at scheduling time.
+8. ~~Margin changes reach live auctions~~ — closed (owner's decision, 2026-09-30): each auction freezes its participants'
+   brackets when it is scheduled (or when a company is invited later); changes apply only to auctions scheduled afterwards
+   (migration 015, `auction_customer_rules`).
 9. With the default `TEAM_INVITE_METHOD=password`, temporary passwords for new logins are shown once to the person who created
    them, who must pass them on; set `TEAM_INVITE_METHOD=email` (with the realm's SMTP configured) to avoid that. Notifications are email only (no SMS), and emails stay
    queued — not sent — until `SMTP_URL` is set.
@@ -502,8 +506,8 @@ through `docker compose exec`; the same admin operations were verified via the R
 
 **Phase B — business decisions that change code** (need the owner's answers)
 6. ~~Purchase limits vs unpaid invoices~~ — decided: not counted.
-7. Margin brackets: freeze them per auction at scheduling time (gap 8)?
-8. Invitations: switch to `TEAM_INVITE_METHOD=email` once SMTP works (gap 9); SMS notifications wanted?
+7. ~~Margin brackets per auction~~ — decided: frozen at scheduling (done, migration 015).
+8. ~~Invitations by email / SMS~~ — decided: keep temporary passwords (gap 9 stays by design), email only, no SMS.
 9. ~~Suspending a customer ends sessions~~ — decided: no.
 
 **Phase C — features not built yet** (need provider / scope decisions)
