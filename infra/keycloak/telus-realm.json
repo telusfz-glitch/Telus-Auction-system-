@@ -23,46 +23,757 @@
   "otpPolicyType": "totp",
   "otpPolicyDigits": 6,
   "otpPolicyPeriod": 30,
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyLookAheadWindow": 1,
+  "otpPolicyInitialCounter": 0,
+  "otpPolicyCodeReusable": false,
+  "otpSupportedApplications": [
+    "totpAppGoogleName",
+    "totpAppMicrosoftAuthenticatorName",
+    "totpAppFreeOTPName"
+  ],
   "roles": {
     "realm": [
-      { "name": "super_admin", "description": "Full staff access" },
-      { "name": "auction_manager", "description": "Create/manage auctions and customers" },
-      { "name": "sales_manager", "description": "View customers, results, reports" },
-      { "name": "finance", "description": "Deposits, invoices, payments" },
-      { "name": "view_only", "description": "Read-only staff" },
-      { "name": "customer_admin", "description": "Customer org owner: bids + manages team logins" },
-      { "name": "customer_bidder", "description": "Customer team member who can bid" },
-      { "name": "customer_viewer", "description": "Customer team member, read-only" }
+      {
+        "name": "super_admin",
+        "description": "Full staff access",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
+      },
+      {
+        "name": "auction_manager",
+        "description": "Create/manage auctions and customers",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
+      },
+      {
+        "name": "sales_manager",
+        "description": "View customers, results, reports",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
+      },
+      {
+        "name": "finance",
+        "description": "Deposits, invoices, payments",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
+      },
+      {
+        "name": "view_only",
+        "description": "Read-only staff",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "staff_mfa"
+          ]
+        }
+      },
+      {
+        "name": "customer_admin",
+        "description": "Customer org owner: bids + manages team logins",
+        "id": "c0570000-0000-4000-8000-0000000000a1"
+      },
+      {
+        "name": "customer_bidder",
+        "description": "Customer team member who can bid",
+        "id": "c0570000-0000-4000-8000-0000000000b1"
+      },
+      {
+        "name": "customer_viewer",
+        "description": "Customer team member, read-only",
+        "id": "c0570000-0000-4000-8000-0000000000c1"
+      },
+      {
+        "name": "staff_mfa",
+        "description": "Marker included in every staff role: the login flow requires an authenticator app (TOTP) for anyone holding it. Never assign directly."
+      }
     ]
   },
   "clients": [
     {
       "clientId": "telus-web",
-      "name": "TELUS web app",
+      "name": "TELUS web app (server-side / BFF)",
       "enabled": true,
-      "publicClient": true,
+      "publicClient": false,
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:3000/*"],
-      "webOrigins": ["http://localhost:3000"],
-      "attributes": { "pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "http://localhost:3000/*" },
+      "redirectUris": [
+        "${TELUS_WEB_URL}/auth/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${TELUS_WEB_URL}/",
+        "backchannel.logout.url": "${TELUS_WEB_URL}/auth/backchannel-logout",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "false"
+      },
       "protocolMappers": [
         {
           "name": "telus-api-audience",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
-          "config": { "included.client.audience": "telus-api", "id.token.claim": "false", "access.token.claim": "true" }
+          "config": {
+            "included.client.audience": "telus-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
         },
         {
           "name": "customer_id",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "config": { "user.attribute": "customer_id", "claim.name": "customer_id", "jsonType.label": "String", "id.token.claim": "false", "access.token.claim": "true" }
+          "config": {
+            "user.attribute": "customer_id",
+            "claim.name": "customer_id",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "amr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-amr-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ],
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${TELUS_WEB_CLIENT_SECRET}",
+      "frontchannelLogout": false
+    },
+    {
+      "clientId": "telus-api",
+      "name": "TELUS API (resource server)",
+      "enabled": true,
+      "bearerOnly": true
+    },
+    {
+      "clientId": "telus-api-admin",
+      "name": "TELUS API — customer login management (service account)",
+      "description": "Used only by the API to create/suspend customer team logins. Holds user-management roles only.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${TELUS_API_ADMIN_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "frontchannelLogout": false,
+      "attributes": {
+        "access.token.lifespan": "120"
+      }
+    },
+    {
+      "clientId": "admin-permissions",
+      "surrogateAuthRequired": false,
+      "enabled": true,
+      "alwaysDisplayInConsole": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "notBefore": 0,
+      "bearerOnly": false,
+      "consentRequired": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": true,
+      "publicClient": false,
+      "frontchannelLogout": false,
+      "protocol": "openid-connect",
+      "attributes": {
+        "realm_client": "false"
+      },
+      "authenticationFlowBindingOverrides": {},
+      "fullScopeAllowed": false,
+      "nodeReRegistrationTimeout": 0,
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "organization",
+        "offline_access",
+        "microprofile-jwt"
+      ],
+      "authorizationSettings": {
+        "allowRemoteResourceManagement": true,
+        "policyEnforcementMode": "ENFORCING",
+        "resources": [
+          {
+            "name": "Roles",
+            "type": "Roles",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "map-role-composite"
+              },
+              {
+                "name": "map-role-client-scope"
+              },
+              {
+                "name": "map-role"
+              }
+            ]
+          },
+          {
+            "name": "Clients",
+            "type": "Clients",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "view"
+              },
+              {
+                "name": "map-roles-client-scope"
+              },
+              {
+                "name": "map-roles"
+              },
+              {
+                "name": "manage"
+              },
+              {
+                "name": "map-roles-composite"
+              }
+            ]
+          },
+          {
+            "name": "Users",
+            "type": "Users",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "manage-group-membership"
+              },
+              {
+                "name": "view"
+              },
+              {
+                "name": "impersonate"
+              },
+              {
+                "name": "map-roles"
+              },
+              {
+                "name": "reset-password"
+              },
+              {
+                "name": "manage"
+              }
+            ]
+          },
+          {
+            "name": "Groups",
+            "type": "Groups",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "manage-members"
+              },
+              {
+                "name": "view"
+              },
+              {
+                "name": "manage-membership-of-members"
+              },
+              {
+                "name": "manage-membership"
+              },
+              {
+                "name": "view-members"
+              },
+              {
+                "name": "manage"
+              },
+              {
+                "name": "impersonate-members"
+              }
+            ]
+          },
+          {
+            "name": "c0570000-0000-4000-8000-000000000001",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "manage-members"
+              },
+              {
+                "name": "view"
+              },
+              {
+                "name": "manage-membership-of-members"
+              },
+              {
+                "name": "manage-membership"
+              },
+              {
+                "name": "view-members"
+              },
+              {
+                "name": "manage"
+              },
+              {
+                "name": "impersonate-members"
+              }
+            ]
+          },
+          {
+            "name": "c0570000-0000-4000-8000-0000000000b1",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "map-role-composite"
+              },
+              {
+                "name": "map-role-client-scope"
+              },
+              {
+                "name": "map-role"
+              }
+            ]
+          },
+          {
+            "name": "c0570000-0000-4000-8000-0000000000c1",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "map-role-composite"
+              },
+              {
+                "name": "map-role-client-scope"
+              },
+              {
+                "name": "map-role"
+              }
+            ]
+          },
+          {
+            "name": "c0570000-0000-4000-8000-0000000000a1",
+            "ownerManagedAccess": false,
+            "attributes": {},
+            "uris": [],
+            "scopes": [
+              {
+                "name": "map-role-composite"
+              },
+              {
+                "name": "map-role-client-scope"
+              },
+              {
+                "name": "map-role"
+              }
+            ]
+          }
+        ],
+        "policies": [
+          {
+            "name": "telus-api-admin service-account user",
+            "type": "user",
+            "logic": "POSITIVE",
+            "decisionStrategy": "UNANIMOUS",
+            "config": {
+              "users": "[\"service-account-telus-api-admin\"]"
+            }
+          },
+          {
+            "name": "manage customer logins",
+            "type": "scope",
+            "logic": "POSITIVE",
+            "decisionStrategy": "UNANIMOUS",
+            "config": {
+              "defaultResourceType": "Groups",
+              "resources": "[\"c0570000-0000-4000-8000-000000000001\"]",
+              "scopes": "[\"manage-membership\",\"manage-members\",\"view-members\",\"view\"]",
+              "applyPolicies": "[\"telus-api-admin service-account user\"]"
+            }
+          },
+          {
+            "name": "grant customer roles",
+            "type": "scope",
+            "logic": "POSITIVE",
+            "decisionStrategy": "UNANIMOUS",
+            "config": {
+              "defaultResourceType": "Roles",
+              "resources": "[\"c0570000-0000-4000-8000-0000000000b1\", \"c0570000-0000-4000-8000-0000000000c1\", \"c0570000-0000-4000-8000-0000000000a1\"]",
+              "scopes": "[\"map-role\"]",
+              "applyPolicies": "[\"telus-api-admin service-account user\"]"
+            }
+          },
+          {
+            "name": "map roles on users",
+            "type": "scope",
+            "logic": "POSITIVE",
+            "decisionStrategy": "UNANIMOUS",
+            "config": {
+              "defaultResourceType": "Users",
+              "resources": "[\"Users\"]",
+              "scopes": "[\"map-roles\"]",
+              "applyPolicies": "[\"telus-api-admin service-account user\"]"
+            }
+          }
+        ],
+        "scopes": [
+          {
+            "name": "manage-group-membership"
+          },
+          {
+            "name": "map-roles-client-scope"
+          },
+          {
+            "name": "map-role"
+          },
+          {
+            "name": "view-members"
+          },
+          {
+            "name": "reset-password"
+          },
+          {
+            "name": "manage"
+          },
+          {
+            "name": "impersonate-members"
+          },
+          {
+            "name": "manage-members"
+          },
+          {
+            "name": "view"
+          },
+          {
+            "name": "manage-membership-of-members"
+          },
+          {
+            "name": "impersonate"
+          },
+          {
+            "name": "manage-membership"
+          },
+          {
+            "name": "map-role-composite"
+          },
+          {
+            "name": "map-roles"
+          },
+          {
+            "name": "map-role-client-scope"
+          },
+          {
+            "name": "map-roles-composite"
+          }
+        ],
+        "decisionStrategy": "UNANIMOUS",
+        "authorizationSchema": {
+          "resourceTypes": {
+            "Roles": {
+              "type": "Roles",
+              "scopes": [
+                "map-role-client-scope",
+                "map-role-composite",
+                "map-role"
+              ],
+              "scopeAliases": {}
+            },
+            "Clients": {
+              "type": "Clients",
+              "scopes": [
+                "map-roles-composite",
+                "manage",
+                "map-roles",
+                "map-roles-client-scope",
+                "view"
+              ],
+              "scopeAliases": {}
+            },
+            "Users": {
+              "type": "Users",
+              "scopes": [
+                "impersonate",
+                "map-roles",
+                "manage",
+                "manage-group-membership",
+                "reset-password",
+                "view"
+              ],
+              "scopeAliases": {
+                "view": [
+                  "view-members"
+                ],
+                "manage": [
+                  "manage-members"
+                ],
+                "impersonate": [
+                  "impersonate-members"
+                ],
+                "manage-group-membership": [
+                  "manage-membership-of-members"
+                ]
+              },
+              "groupType": "Groups"
+            },
+            "Groups": {
+              "type": "Groups",
+              "scopes": [
+                "manage-membership",
+                "manage",
+                "manage-membership-of-members",
+                "manage-members",
+                "impersonate-members",
+                "view",
+                "view-members"
+              ],
+              "scopeAliases": {}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"validations\":{\"length\":{\"min\":3,\"max\":255},\"username-prohibited-characters\":{},\"up-username-not-idn-homograph\":{}},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"email\",\"displayName\":\"${email}\",\"validations\":{\"email\":{},\"length\":{\"max\":255}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"validations\":{\"length\":{\"max\":255},\"person-name-prohibited-characters\":{}},\"required\":{\"roles\":[\"user\"]},\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]},\"multivalued\":false},{\"name\":\"customer_id\",\"displayName\":\"Customer ID\",\"permissions\":{\"view\":[\"admin\"],\"edit\":[\"admin\"]},\"validations\":{\"pattern\":{\"pattern\":\"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$\",\"error-message\":\"customer_id must be a UUID\"}},\"multivalued\":false}],\"groups\":[{\"name\":\"user-metadata\",\"displayHeader\":\"User metadata\",\"displayDescription\":\"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "service-account-telus-api-admin",
+      "enabled": true,
+      "serviceAccountClientId": "telus-api-admin",
+      "clientRoles": {
+        "realm-management": [
+          "query-users",
+          "query-groups",
+          "view-realm"
+        ]
+      }
+    }
+  ],
+  "adminPermissionsEnabled": true,
+  "groups": [
+    {
+      "id": "c0570000-0000-4000-8000-000000000001",
+      "name": "customers",
+      "path": "/customers",
+      "attributes": {
+        "description": [
+          "Every customer login. The API's service account may manage members of this group only."
+        ]
+      },
+      "subGroups": []
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "telus browser",
+      "description": "Browser login: password, then an authenticator code — always for staff, and for customers who enrolled one.",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "autheticatorFlow": true,
+          "flowAlias": "telus browser forms",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false
         }
       ]
     },
-    { "clientId": "telus-api", "name": "TELUS API (resource server)", "enabled": true, "bearerOnly": true }
-  ]
+    {
+      "alias": "telus browser forms",
+      "description": "Username/password, then the OTP rules",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-amr-pwd"
+        },
+        {
+          "authenticatorFlow": true,
+          "autheticatorFlow": true,
+          "flowAlias": "telus staff otp",
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "autheticatorFlow": true,
+          "flowAlias": "telus customer otp",
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "telus staff otp",
+      "description": "Staff (any role including staff_mfa): OTP required; enrolment is forced if none is configured",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-cond-staff"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-amr-otp-staff"
+        }
+      ]
+    },
+    {
+      "alias": "telus customer otp",
+      "description": "Customers: OTP when they have enrolled one (team logins are created with CONFIGURE_TOTP)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-configured",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-cond-not-staff"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "autheticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 30,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "telus-amr-otp-customer"
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "telus-amr-pwd",
+      "config": {
+        "default.reference.value": "pwd",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "telus-amr-otp-staff",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "telus-amr-otp-customer",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "telus-cond-staff",
+      "config": {
+        "condUserRole": "staff_mfa",
+        "negate": "false"
+      }
+    },
+    {
+      "alias": "telus-cond-not-staff",
+      "config": {
+        "condUserRole": "staff_mfa",
+        "negate": "true"
+      }
+    }
+  ],
+  "browserFlow": "telus browser"
 }

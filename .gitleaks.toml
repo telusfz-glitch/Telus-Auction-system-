@@ -1,0 +1,20 @@
+# Secret scanning (gitleaks). Default rules, plus a NARROW allow-list for known test fixtures — by value pattern,
+# never by directory, so a real secret committed into a test file is still reported.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Throwaway credentials of the test suites and CI services (always prefixed test- or e2e-)"
+regexes = ['''^(test|e2e)-[a-z-]*secret[a-z0-9-]*$''']
+
+[[allowlists]]
+description = "JWT header prefixes used by tests to detect or forge tokens (RS256 header prefix; unsigned alg:none token)"
+regexes = ['''^eyJhbGciOiJSUzI1NiIs$''', '''^eyJhbGciOiJub25lIn0\.e30\.$''']
+
+[[allowlists]]
+description = "Environment-variable lookups, not values"
+regexes = ['''^e\.E2E_[A-Z_]+$''']
+
+[[allowlists]]
+description = "Stripe-shaped test fixtures (exact placeholder values with the 0123456789 run; real test or live keys still reported)"
+regexes = ['''^(sk|rk)_test_(e2e_)?0123456789$''', '''^whsec_(test|e2e)_0123456789abcdefghijklmnopqrstuv(wx)?$''']

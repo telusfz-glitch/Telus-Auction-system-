@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"],
+    "sourceMap": true,
+    "paths": { "@telus/shared": ["../../packages/shared/dist/index.d.ts"] }
+  },
+  "include": ["src"]
+}

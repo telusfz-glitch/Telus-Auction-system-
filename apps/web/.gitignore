@@ -1,0 +1,6 @@
+.next
+test-results
+playwright-report
+e2e/.auth
+tsconfig.tsbuildinfo
+demo-output

@@ -2,3 +2,10 @@ node_modules
 dist
 .env
 *.log
+
+# Terraform working files and local state backends
+.terraform/
+*.tfstate
+*.tfstate.*
+infra/aws/envs/*.backend.hcl
+!infra/aws/envs/example.backend.hcl

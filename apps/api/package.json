@@ -7,29 +7,54 @@
     "migrate": "ts-node -r tsconfig-paths/register src/db/migrate.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest --runInBand",
-    "test:db": "REQUIRE_DB_TESTS=1 jest --runInBand test/rls.spec.ts test/bids.spec.ts"
+    "test:db": "REQUIRE_DB_TESTS=1 jest --runInBand test/rls.spec.ts test/bids.spec.ts test/lifecycle.spec.ts test/realtime.e2e.spec.ts test/admin.spec.ts test/notifications.spec.ts test/ops.e2e.spec.ts",
+    "test:redis": "REQUIRE_REDIS_TESTS=1 jest --runInBand test/realtime-cluster.e2e.spec.ts",
+    "test:kc": "REQUIRE_KEYCLOAK_TESTS=1 jest --runInBand test/team.kc.spec.ts",
+    "test:s3": "REQUIRE_S3_TESTS=1 jest --runInBand test/audit-ship.spec.ts",
+    "test:backup": "REQUIRE_BACKUP_TESTS=1 jest --runInBand test/backup.spec.ts",
+    "load": "ts-node -r tsconfig-paths/register test/load/bid-load.ts",
+    "load:http": "ts-node -r tsconfig-paths/register test/load/http-load.ts",
+    "audit:verify": "ts-node -r tsconfig-paths/register src/audit/verify-cli.ts",
+    "build": "tsc -p ../../packages/shared/tsconfig.build.json && tsc -p tsconfig.build.json",
+    "start:prod": "node dist/main.js",
+    "migrate:prod": "node dist/db/migrate.js"
   },
   "dependencies": {
-    "@nestjs/common": "^10.4.0",
-    "@nestjs/core": "^10.4.0",
-    "@nestjs/platform-express": "^10.4.0",
-    "@nestjs/throttler": "^6.2.1",
+    "@aws-sdk/client-s3": "^3.1141.0",
+    "@nestjs/common": "^11.2.6",
+    "@nestjs/core": "^11.2.6",
+    "@nestjs/platform-express": "^11.2.6",
+    "@nestjs/platform-socket.io": "^11.2.6",
+    "@nestjs/throttler": "^6.7.1",
+    "@nestjs/websockets": "^11.2.6",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@telus/shared": "*",
     "helmet": "^8.0.0",
     "jose": "^5.9.6",
+    "nodemailer": "^10.0.12",
     "pg": "^8.13.0",
+    "prom-client": "^15.1.3",
+    "redis": "^4.7.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "socket.io": "4.8.3",
+    "stripe": "^22.6.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@nestjs/testing": "^10.4.0",
+    "@nestjs/testing": "^11.2.6",
     "@types/express": "^4.17.21",
     "@types/jest": "^29.5.14",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^20.16.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.11.10",
+    "@types/smtp-server": "^3.5.13",
     "@types/supertest": "^6.0.2",
     "jest": "^29.7.0",
+    "mailparser": "^3.9.30",
+    "smtp-server": "^3.19.15",
+    "socket.io-client": "^4.8.4",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
@@ -39,9 +64,13 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "roots": ["<rootDir>/test"],
+    "roots": [
+      "<rootDir>/test"
+    ],
     "testRegex": ".*\\.spec\\.ts$",
-    "moduleNameMapper": { "^@telus/shared$": "<rootDir>/../../packages/shared/src/index.ts" },
+    "moduleNameMapper": {
+      "^@telus/shared$": "<rootDir>/../../packages/shared/src/index.ts"
+    },
     "testTimeout": 30000
   }
 }

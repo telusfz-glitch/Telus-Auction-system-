@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Ip, Post } from '@nestjs/common';
-import { CUSTOMER_ROLES, CreateCustomerSchema, STAFF_ROLES, type CreateCustomerInput } from '@telus/shared';
+import { AUCTION_MANAGERS, CUSTOMER_ROLES, CreateCustomerSchema, STAFF_ROLES, type CreateCustomerInput } from '@telus/shared';
 import { AuditService } from '../audit/audit.service';
 import { CurrentPrincipal, Roles } from '../auth/decorators';
 import type { Principal } from '../auth/principal';
@@ -30,7 +30,7 @@ export class CustomersController {
   }
 
   @Post('admin/customers')
-  @Roles('super_admin', 'auction_manager')
+  @Roles(...AUCTION_MANAGERS)
   create(@CurrentPrincipal() p: Principal, @Body(new ZodValidationPipe(CreateCustomerSchema)) body: CreateCustomerInput, @Ip() ip: string) {
     return this.db.withPrincipal(p, async (c) => {
       const { rows } = await c.query(

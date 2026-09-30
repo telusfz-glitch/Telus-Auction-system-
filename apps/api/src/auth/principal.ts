@@ -6,4 +6,6 @@ export interface Principal {
   roles: string[];
   customerId: string | null;
   customerRole: string | null;
+  /** exp of the access token this principal came from (epoch seconds). */
+  tokenExp?: number;
 }

@@ -3,8 +3,18 @@
   "private": true,
   "workspaces": ["packages/*", "apps/*"],
   "scripts": {
-    "typecheck": "npm run typecheck -w @telus/api",
-    "test": "npm test -w @telus/api",
-    "test:db": "npm run test:db -w @telus/api"
+    "typecheck": "npm run typecheck -w @telus/api && npm run typecheck -w @telus/web",
+    "test": "npm test -w @telus/api && npm test -w @telus/web",
+    "test:db": "npm run test:db -w @telus/api",
+    "test:redis": "npm run test:redis -w @telus/api",
+    "test:kc": "npm run test:kc -w @telus/api",
+    "test:s3": "npm run test:s3 -w @telus/api",
+    "e2e": "npm run e2e -w @telus/web",
+    "dev:web": "npm run dev -w @telus/web",
+    "build:web": "npm run build -w @telus/web"
+  },
+  "overrides": {
+    "postcss": "^8.5.28",
+    "uuid": "^11.1.1"
   }
 }

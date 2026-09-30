@@ -10,7 +10,7 @@ export class RolesGuard implements CanActivate {
 
   canActivate(ctx: ExecutionContext): boolean {
     if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [ctx.getHandler(), ctx.getClass()])) return true;
-    const principal = ctx.switchToHttp().getRequest().principal;
+    const principal = ctx.getType() === 'ws' ? ctx.switchToWs().getClient()?.data?.principal : ctx.switchToHttp().getRequest().principal;
     if (!principal) throw new UnauthorizedException();
 
     const required = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [ctx.getHandler(), ctx.getClass()]);

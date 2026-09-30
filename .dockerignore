@@ -1,0 +1,13 @@
+**/node_modules
+**/.next
+**/dist
+**/test-results
+**/playwright-report
+**/demo-output
+.git
+.env
+.env.*
+**/*.log
+# Web image: Playwright tests are not part of the app (they import the API source, absent from the web build)
+apps/web/e2e
+apps/web/playwright.config.ts

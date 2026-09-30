@@ -1,5 +1,5 @@
 import { SignJWT, type KeyLike } from 'jose';
-import { ForbiddenPrincipalError, InvalidTokenError, TokenVerifier } from '../src/auth/token-verifier';
+import { ForbiddenPrincipalError, InvalidTokenError, MfaRequiredError, TokenVerifier } from '../src/auth/token-verifier';
 import { AUD, CUST_A, ISS, customerClaims, makeKeys, signToken, staffClaims } from './helpers';
 
 describe('TokenVerifier — JWT validation and principal mapping', () => {
@@ -47,6 +47,20 @@ describe('TokenVerifier — JWT validation and principal mapping', () => {
 
   it('rejects garbage', async () => {
     await expect(verifier.verify('not.a.jwt')).rejects.toBeInstanceOf(InvalidTokenError);
+  });
+
+  it('forbids a staff token that does not show a second factor (password alone never reaches the staff API)', async () => {
+    const { amr: _amr, ...noAmr } = staffClaims('super_admin');
+    for (const claims of [noAmr, { ...noAmr, amr: ['pwd'] }, { ...noAmr, amr: 'otp' }, { ...noAmr, amr: [42] }]) {
+      await expect(verifier.verify(await signToken(priv, claims))).rejects.toBeInstanceOf(MfaRequiredError);
+    }
+    // Customers are not affected: their second factor is governed by the login flow (enrolled logins are always asked).
+    await expect(verifier.verify(await signToken(priv, customerClaims('customer_admin')))).resolves.toMatchObject({ kind: 'customer' });
+    // Configurable (e.g. accept a hardware key), and can be switched off only explicitly.
+    const hwk = new TokenVerifier({ issuer: ISS, audience: AUD, getKey: async () => pub, staffAmr: ['otp', 'hwk'] });
+    await expect(hwk.verify(await signToken(priv, { ...noAmr, amr: ['pwd', 'hwk'] }))).resolves.toMatchObject({ kind: 'staff' });
+    const off = new TokenVerifier({ issuer: ISS, audience: AUD, getKey: async () => pub, staffAmr: [] });
+    await expect(off.verify(await signToken(priv, noAmr))).resolves.toMatchObject({ kind: 'staff' });
   });
 
   it('forbids an identity holding both staff and customer roles', async () => {

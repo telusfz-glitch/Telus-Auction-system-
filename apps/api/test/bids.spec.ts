@@ -282,4 +282,38 @@ const gBid = custP(CU.G, 'customer_bidder', 'g-bid');   // limited capacity (AED
   it('margin brackets cannot overlap (enforced by the database)', async () => {
     await expect(asStaff(admin, (c) => c.query(`INSERT INTO margin_rule_brackets (rule_set_id, price_from, price_to, margin) VALUES ('${id(901)}',150,250,9)`).then(() => undefined))).rejects.toThrow(/brackets_no_overlap/);
   });
+
+  it('lot table (myPositions): prices only in full-price auctions, own position always, nothing for the uninvited', async () => {
+    const FP = id(151), HID = id(152);
+    const lot = (a: string, n: number) => id((a === FP ? 310 : 320) + n);
+    await asStaff(admin, async (c) => {
+      await c.query(`
+        INSERT INTO auctions (id, number, name, status, start_at, close_at, bid_visibility) VALUES
+          ('${FP}','A-POS-FP','PosFP','live', now() - interval '1 hour', now() + interval '1 hour','full_price'),
+          ('${HID}','A-POS-H','PosH','live', now() - interval '1 hour', now() + interval '1 hour','winning_losing_only');
+        INSERT INTO auction_participants (auction_id, customer_id, terms_accepted_at) VALUES
+          ('${FP}','${CU.A}',now()), ('${FP}','${CU.B}',now()), ('${HID}','${CU.A}',now()), ('${HID}','${CU.B}',now());
+        INSERT INTO auction_lots (id, auction_id, lot_number, description, quantity, starting_price) VALUES
+          ('${lot(FP, 1)}','${FP}','1','p1',1,100), ('${lot(FP, 2)}','${FP}','2','p2',1,100), ('${lot(FP, 3)}','${FP}','3','p3',1,100),
+          ('${lot(HID, 1)}','${HID}','1','h1',1,100), ('${lot(HID, 2)}','${HID}','2','h2',1,100), ('${lot(HID, 3)}','${HID}','3','h3',1,100);`);
+    });
+    for (const a of [FP, HID]) {
+      await bid(aBid, lot(a, 1), 100);
+      await bid(bBid, lot(a, 1), 110);   // A is outbid on lot 1
+      await bid(aBid, lot(a, 2), 150);   // A leads lot 2; lot 3 has no bids
+    }
+    const byLot = async (a: string) => Object.fromEntries((await svc.myPositions(aBid, a)).map((r) => [r.lotId, r]));
+
+    const fp = await byLot(FP);   // A's rule set: 100–200 → +5
+    expect(fp[lot(FP, 1)]).toMatchObject({ status: 'outbid', myHighestBid: '100.00', currentHighestBid: '110.00', minNextBid: '115.00' });
+    expect(fp[lot(FP, 2)]).toMatchObject({ status: 'leading', myHighestBid: '150.00', currentHighestBid: '150.00', minNextBid: '155.00' });
+    expect(fp[lot(FP, 3)]).toMatchObject({ status: 'no_bid', myHighestBid: null, currentHighestBid: null, minNextBid: '100.00' });
+
+    const hid = await byLot(HID);   // the competitor's price never shows; A's own price does, where A leads
+    expect(hid[lot(HID, 1)]).toMatchObject({ status: 'outbid', myHighestBid: '100.00', currentHighestBid: null, minNextBid: null });
+    expect(hid[lot(HID, 2)]).toMatchObject({ status: 'leading', myHighestBid: '150.00', currentHighestBid: null, minNextBid: '155.00' });
+    expect(hid[lot(HID, 3)]).toMatchObject({ status: 'no_bid', currentHighestBid: null, minNextBid: null });
+
+    expect(await codeOf(svc.myPositions(cBid, FP))).toBe('AUCTION_NOT_FOUND');   // not invited
+  });
 });

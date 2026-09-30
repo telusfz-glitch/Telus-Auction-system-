@@ -16,5 +16,6 @@ export async function signToken(privateKey: KeyLike, claims: Record<string, unkn
   if (o.sub !== null) jwt.setSubject(o.sub ?? 'user-1');
   return jwt.sign(privateKey);
 }
-export const staffClaims = (role: string) => ({ preferred_username: `${role}@telus.ae`, realm_access: { roles: [role] } });
+// Staff tokens carry `amr` like Keycloak's AMR mapper writes after password + authenticator app.
+export const staffClaims = (role: string) => ({ preferred_username: `${role}@telus.ae`, realm_access: { roles: [role] }, amr: ['pwd', 'otp'] });
 export const customerClaims = (role: string, customerId = CUST_A) => ({ preferred_username: `${role}@x.ae`, customer_id: customerId, realm_access: { roles: [role] } });

@@ -1,0 +1,213 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # Throwaway credentials for the ephemeral CI services (see scripts/ci/prepare-services.sh).
+  TEST_DB_ADMIN_URL: postgres://telus_owner:owner@localhost:5432/telus_test
+  TEST_DB_APP_URL: postgres://telus_app:app@localhost:5432/telus_test
+  TEST_REDIS_URL: redis://localhost:6379
+  TEST_KEYCLOAK_ISSUER: http://localhost:8080/realms/telus
+  TEST_KEYCLOAK_ADMIN_SECRET: e2e-api-admin-secret-0123456789
+  TEST_S3_ENDPOINT: http://127.0.0.1:5055
+  TEST_DB_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/postgres
+  TEST_DB_BACKUP_URL: postgres://telus_backup:backup@localhost:5432/telus_test
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      # Fails on any known vulnerability of high severity or worse in production dependencies.
+      - run: npm audit --omit=dev --audit-level=high
+
+  secrets:
+    name: Secret scan (gitleaks, full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Install gitleaks 8.28.0 (checksum-pinned)
+        run: |
+          curl -sSLo gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  gitleaks.tgz" | sha256sum -c -
+          tar xzf gitleaks.tgz gitleaks
+      # Every commit, with the narrow fixture allow-list in .gitleaks.toml. Findings are redacted in the log.
+      - run: ./gitleaks git --redact --no-banner --exit-code 1 .
+
+  api:
+    name: API — typecheck, unit, database, Redis, Keycloak
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: scripts/ci/prepare-services.sh
+      # S3-compatible store with Object Lock for the audit-shipping tests (moto: in-process AWS mock, pinned).
+      - name: Start S3 (moto)
+        run: |
+          # Own virtualenv: the runner's system boto3/pyOpenSSL are incompatible with moto's.
+          python3 -m venv /tmp/moto && /tmp/moto/bin/pip install --quiet 'moto[server]==5.2.3'
+          nohup /tmp/moto/bin/moto_server -H 127.0.0.1 -p 5055 > /tmp/moto.log 2>&1 &
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:5055/ && exit 0; sleep 1; done
+          cat /tmp/moto.log; exit 1
+      # Backup/restore drill tests call pg_dump/pg_restore: the client must match the server (16). The scheduled drill
+      # also starts its own throwaway server (initdb/pg_ctl), as it does in the ops image.
+      - name: PostgreSQL 16 client and server binaries
+        run: |
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-16
+          fi
+          if ! pg_dump --version 2>/dev/null | grep -q ' 16\.'; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
+            sudo ln -sf /usr/lib/postgresql/16/bin/pg_dump /usr/local/bin/pg_dump
+            sudo ln -sf /usr/lib/postgresql/16/bin/pg_restore /usr/local/bin/pg_restore
+          fi
+          pg_dump --version | grep ' 16\.'
+      - run: npm run typecheck -w @telus/api
+      # With the TEST_* variables set, `npm test` runs every suite, including DB, Redis-cluster and Keycloak ones.
+      - run: npm test -w @telus/api
+      # The same suites again with REQUIRE_*: a missing service fails the build instead of skipping silently.
+      - run: npm run test:db -w @telus/api && npm run test:redis -w @telus/api && npm run test:kc -w @telus/api && npm run test:s3 -w @telus/api && npm run test:backup -w @telus/api
+
+  web:
+    name: Web — typecheck, unit, build, end-to-end
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      E2E_DB_ADMIN_URL: postgres://telus_owner:owner@localhost:5432/telus_e2e_test
+      E2E_DB_APP_URL: postgres://telus_app:app@localhost:5432/telus_e2e_test
+      E2E_REDIS_URL: redis://localhost:6379/2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ env.NODE_VERSION }}', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: scripts/ci/prepare-services.sh
+      - run: npm run typecheck -w @telus/web
+      - run: npm test -w @telus/web
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      # Builds the production web app, starts it and the API, and drives Chromium through real Keycloak logins.
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          retention-days: 7
+
+  images:
+    name: Container images — build and smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API, ops and web images
+        run: |
+          docker build -f apps/api/Dockerfile --target runtime -t telus-api:ci .
+          docker build -f apps/api/Dockerfile --target ops -t telus-ops:ci .
+          docker build -f apps/web/Dockerfile -t telus-web:ci .
+          docker build -f infra/keycloak/Dockerfile -t telus-keycloak:ci .
+      - name: Smoke-test the images
+        run: |
+          # API: compiled code loads, the shared package resolves to its compiled JavaScript, runs as non-root.
+          docker run --rm telus-api:ci node -e "const s=require('@telus/shared'); if(!s.STAFF_ROLES) process.exit(1); require('./apps/api/dist/app.module'); console.log('api ok')"
+          test "$(docker run --rm telus-api:ci id -u)" != "0"
+          docker run --rm telus-api:ci ls apps/api/db/migrations | grep -q '001_init.sql'
+          # ops: pg_dump 16 and the scripts are present.
+          docker run --rm --entrypoint ls telus-keycloak:ci /opt/keycloak/data/import/telus-realm.json
+          docker run --rm telus-ops:ci bash -c "test -x scripts/db/bootstrap-roles.sh && test -f scripts/db/s3-put.js && node -e \"require('@aws-sdk/client-s3')\"" 
+          docker run --rm telus-ops:ci bash -c "pg_dump --version | grep -q ' 16\.' && test -x scripts/db/backup.sh && test -x scripts/db/restore-drill.sh && echo ops ok"
+          # ops: the monthly drill can start its own throwaway server as the image's non-root user.
+          docker run --rm telus-ops:ci bash -c "test -x scripts/db/scheduled-drill.sh && /usr/lib/postgresql/16/bin/initdb -D /tmp/d -U drill --auth=trust >/dev/null && echo drill ok"
+          # web: the standalone server answers.
+          docker run -d --name web -p 3000:3000 -e WEB_URL=http://localhost:3000 -e OIDC_ISSUER=http://localhost:8080/realms/telus \
+            -e OIDC_CLIENT_ID=telus-web -e OIDC_CLIENT_SECRET=e2e-web-client-secret-0123456789 -e API_URL=http://localhost:4000 \
+            -e API_PUBLIC_URL=http://localhost:4000 -e REDIS_URL=redis://localhost:6379 -e SESSION_SECRET=e2e-session-secret-0123456789abcdef-0123456789 \
+            -e ALLOW_HTTP_FOR_LOCAL_TESTING=true telus-web:ci
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 1; done
+          curl -sf -o /dev/null -w "web %{http_code}\n" http://localhost:3000/
+          docker logs web | tail -5
+
+  terraform:
+    name: AWS infrastructure — fmt, validate, plan tests, Checkov
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      # Plans staging and production against a mocked AWS provider: no credentials, nothing created.
+      - run: terraform test
+      - name: Checkov (every skip carries its reason in the code)
+        run: |
+          python3 -m venv /tmp/ck && /tmp/ck/bin/pip install -q checkov==3.3.20
+          /tmp/ck/bin/checkov -d . --framework terraform --quiet --compact
+
+  demo:
+    name: One-command demo (docker compose) — starts and signs in
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the demo exactly as demo/README.md says
+        run: docker compose -f demo/docker-compose.yml up -d --build
+      - name: Setup finished, app answers, Sign in reaches the login page
+        run: |
+          for i in $(seq 1 90); do curl -sf -o /dev/null http://localhost:3000/ && break; sleep 2; done
+          docker compose -f demo/docker-compose.yml logs setup | tail -15
+          docker compose -f demo/docker-compose.yml logs setup | grep -q 'Demo ready'
+          curl -sf http://localhost:4000/health
+          # The web container must reach Keycloak at the browser's address (localhost:8080) to build the sign-in redirect.
+          loc=$(curl -s -o /dev/null -w '%{redirect_url}' http://localhost:3000/auth/login)
+          echo "sign-in redirects to: $loc"
+          case "$loc" in http://localhost:8080/realms/telus/protocol/openid-connect/auth*) ;; *) exit 1;; esac
+          curl -sf -o /dev/null "$loc" && echo "login page OK"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f demo/docker-compose.yml logs --tail 80

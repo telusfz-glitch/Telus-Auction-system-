@@ -1,0 +1,27 @@
+env        = "production"
+app_domain = "auction.telus.ae"
+api_domain = "api.auction.telus.ae"
+id_domain  = "id.auction.telus.ae"
+# certificate_arn = "arn:aws:acm:me-central-1:<account>:certificate/<id>"   (required)
+# image_tag       = "<git sha>"                                              (set by the deploy job)
+# alarm_email     = "ops@telus.ae"
+# admin_cidrs     = ["<office public IP>/32"]                                (Keycloak admin console)
+vpc_cidr = "10.40.0.0/16"
+sizes = {
+  multi_az             = true
+  nat_gateways         = 2
+  db_instance_class    = "db.m7g.large"
+  db_storage_gb        = 200
+  db_backup_days       = 35
+  redis_node_type      = "cache.m7g.large"
+  redis_replicas       = 1
+  api_count            = 3
+  web_count            = 2
+  keycloak_count       = 2
+  api_cpu              = 1024
+  api_memory           = 2048
+  log_retention_days   = 365
+  audit_retention_days = 2557
+  backup_lock_days     = 35
+  drill_storage_gib    = 100
+}

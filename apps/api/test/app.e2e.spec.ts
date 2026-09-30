@@ -10,11 +10,11 @@ describe('Full app wiring — real AppModule + real security configuration', () 
   beforeAll(async () => {
     Object.assign(process.env, {
       NODE_ENV: 'test', DATABASE_URL: 'postgres://u:p@127.0.0.1:1/none', KEYCLOAK_ISSUER: 'http://localhost:8080/realms/telus',
-      API_AUDIENCE: 'telus-api', CORS_ORIGINS: 'https://auction.telus.ae',
+      API_AUDIENCE: 'telus-api', CORS_ORIGINS: 'https://auction.telus.ae', WORKERS_ENABLED: 'false',
     });
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = mod.createNestApplication();
-    configureApp(app, loadEnv());
+    await configureApp(app, loadEnv());
     await app.init();
   });
   afterAll(() => app.close());
@@ -34,6 +34,13 @@ describe('Full app wiring — real AppModule + real security configuration', () 
       const res = await (http() as any)[method.toLowerCase()](path).expect(401);
       expect(JSON.stringify(res.body)).not.toMatch(/stack|jose|at .*\.ts/i);
     });
+
+  it('readiness fails (503, no details) when the database is unreachable; /metrics is off without a token', async () => {
+    const res = await http().get('/health/ready').expect(503);
+    expect(res.body).toMatchObject({ statusCode: 503, code: 'NOT_READY', message: 'Not ready.' });
+    expect(Object.keys(res.body).sort()).toEqual(['code', 'correlationId', 'message', 'statusCode']);   // nothing about why
+    await http().get('/metrics').expect(404);
+  });
 
   it('a forged token → 401', () => http().get('/admin/customers').set('Authorization', 'Bearer eyJhbGciOiJub25lIn0.e30.').expect(401));
 

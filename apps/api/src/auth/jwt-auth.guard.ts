@@ -1,7 +1,8 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { WsException } from '@nestjs/websockets';
 import { IS_PUBLIC } from './decorators';
-import { ForbiddenPrincipalError, TokenVerifier } from './token-verifier';
+import { ForbiddenPrincipalError, MfaRequiredError, TokenVerifier } from './token-verifier';
 
 const MAX_TOKEN_LENGTH = 8192;
 
@@ -11,6 +12,12 @@ export class JwtAuthGuard implements CanActivate {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [ctx.getHandler(), ctx.getClass()])) return true;
+    // Sockets authenticate once, at the handshake (RealtimeGateway). Any other transport fails closed.
+    if (ctx.getType() === 'ws') {
+      if (!ctx.switchToWs().getClient()?.data?.principal) throw new WsException('unauthorized');
+      return true;
+    }
+    if (ctx.getType() !== 'http') throw new ForbiddenException();
 
     const req = ctx.switchToHttp().getRequest();
     const header: unknown = req.headers['authorization'];
@@ -22,6 +29,10 @@ export class JwtAuthGuard implements CanActivate {
       req.principal = await this.verifier.verify(token);
       return true;
     } catch (err) {
+      // The one refusal the web app acts on: it re-runs the login so the user signs in with their authenticator.
+      if (err instanceof MfaRequiredError) {
+        throw new ForbiddenException({ statusCode: 403, code: 'MFA_REQUIRED', message: 'Sign in again with your authenticator app.' });
+      }
       if (err instanceof ForbiddenPrincipalError) throw new ForbiddenException();
       throw new UnauthorizedException();
     }
