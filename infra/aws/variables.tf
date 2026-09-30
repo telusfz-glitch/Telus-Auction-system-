@@ -71,6 +71,7 @@ variable "sizes" {
     log_retention_days   = number
     audit_retention_days = number
     backup_lock_days     = number
+    drill_storage_gib    = optional(number, 30) # restore drill task disk (21–200): fits the dump plus the restored database
   })
   default = {
     multi_az             = false

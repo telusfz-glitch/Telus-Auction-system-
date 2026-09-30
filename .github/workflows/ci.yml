@@ -79,9 +79,13 @@ jobs:
           nohup /tmp/moto/bin/moto_server -H 127.0.0.1 -p 5055 > /tmp/moto.log 2>&1 &
           for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:5055/ && exit 0; sleep 1; done
           cat /tmp/moto.log; exit 1
-      # Backup/restore drill tests call pg_dump/pg_restore: the client must match the server (16).
-      - name: PostgreSQL 16 client
+      # Backup/restore drill tests call pg_dump/pg_restore: the client must match the server (16). The scheduled drill
+      # also starts its own throwaway server (initdb/pg_ctl), as it does in the ops image.
+      - name: PostgreSQL 16 client and server binaries
         run: |
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-16
+          fi
           if ! pg_dump --version 2>/dev/null | grep -q ' 16\.'; then
             sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
             sudo ln -sf /usr/lib/postgresql/16/bin/pg_dump /usr/local/bin/pg_dump
@@ -153,6 +157,8 @@ jobs:
           docker run --rm --entrypoint ls telus-keycloak:ci /opt/keycloak/data/import/telus-realm.json
           docker run --rm telus-ops:ci bash -c "test -x scripts/db/bootstrap-roles.sh && test -f scripts/db/s3-put.js && node -e \"require('@aws-sdk/client-s3')\"" 
           docker run --rm telus-ops:ci bash -c "pg_dump --version | grep -q ' 16\.' && test -x scripts/db/backup.sh && test -x scripts/db/restore-drill.sh && echo ops ok"
+          # ops: the monthly drill can start its own throwaway server as the image's non-root user.
+          docker run --rm telus-ops:ci bash -c "test -x scripts/db/scheduled-drill.sh && /usr/lib/postgresql/16/bin/initdb -D /tmp/d -U drill --auth=trust >/dev/null && echo drill ok"
           # web: the standalone server answers.
           docker run -d --name web -p 3000:3000 -e WEB_URL=http://localhost:3000 -e OIDC_ISSUER=http://localhost:8080/realms/telus \
             -e OIDC_CLIENT_ID=telus-web -e OIDC_CLIENT_SECRET=e2e-web-client-secret-0123456789 -e API_URL=http://localhost:4000 \

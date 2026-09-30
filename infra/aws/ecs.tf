@@ -48,6 +48,7 @@ locals {
     migrate   = { NODE_ENV = "production" }
     bootstrap = { ADMIN_URL = "postgres://${aws_db_instance.main.username}@${local.db_host}:5432/postgres?sslmode=verify-full&sslrootcert=/app/rds-ca.pem" }
     backup    = { BACKUP_S3_URI = "s3://${aws_s3_bucket.backups.bucket}/daily/" }
+    drill     = { DRILL_S3_URI = "s3://${aws_s3_bucket.backups.bucket}/daily/", DRILL_MAX_AGE_HOURS = 36 }
     verify    = { NODE_ENV = "production", AUDIT_SHIP_BUCKET = aws_s3_bucket.audit.bucket, AUDIT_SHIP_REGION = var.region, KEYCLOAK_ISSUER = local.issuer }
   }
   secrets = {
@@ -64,6 +65,7 @@ locals {
     { PGPASSWORD = "${aws_db_instance.main.master_user_secret[0].secret_arn}:password::" })
     backup = { BACKUP_DB_URL = local.secret["BACKUP_DB_URL"] }
     verify = { DATABASE_URL = local.secret["DATABASE_URL"] }
+    drill  = {} # no database credentials: it restores into its own throwaway server
   }
 }
 
@@ -119,13 +121,13 @@ resource "aws_iam_role_policy" "api_audit" {
   })
 }
 
-# ops: write backups, read the audit copy (audit:verify) — never delete either.
+# ops: write backups and read them back (monthly restore drill), read the audit copy (audit:verify) — never delete either.
 resource "aws_iam_role_policy" "ops" {
   role = aws_iam_role.task["ops"].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Effect = "Allow", Action = ["s3:PutObject"], Resource = "${aws_s3_bucket.backups.arn}/*" },
+      { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.backups.arn}/*" },
       { Effect = "Allow", Action = ["s3:GetObject", "s3:GetObjectRetention"], Resource = "${aws_s3_bucket.audit.arn}/*" },
       { Effect = "Allow", Action = ["s3:ListBucket"], Resource = [aws_s3_bucket.audit.arn, aws_s3_bucket.backups.arn] },
       { Effect = "Allow", Action = ["kms:GenerateDataKey", "kms:Decrypt"], Resource = aws_kms_key.main.arn },
@@ -143,6 +145,8 @@ locals {
     bootstrap = { image = local.repo["ops"], cpu = 256, memory = 512, role = "ops", log = "ops", ports = [], command = ["scripts/db/bootstrap-roles.sh"] }
     backup    = { image = local.repo["ops"], cpu = 512, memory = 1024, role = "ops", log = "ops", ports = [], command = ["scripts/db/backup.sh", "/tmp"] }
     verify    = { image = local.repo["api"], cpu = 256, memory = 512, role = "ops", log = "ops", ports = [], command = ["node", "apps/api/dist/audit/verify-cli.js"] }
+    # Restores the newest backup into a throwaway PostgreSQL inside the task: room for the dump and the restored copy.
+    drill = { image = local.repo["ops"], cpu = 1024, memory = 4096, role = "ops", log = "ops", ports = [], command = ["scripts/db/scheduled-drill.sh"], storage = var.sizes.drill_storage_gib }
   }
 }
 
@@ -155,6 +159,10 @@ resource "aws_ecs_task_definition" "task" {
   memory                   = each.value.memory
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task[each.value.role].arn
+  dynamic "ephemeral_storage" {
+    for_each = try(each.value.storage, null) == null ? [] : [each.value.storage]
+    content { size_in_gib = ephemeral_storage.value }
+  }
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"

@@ -49,13 +49,15 @@ CMD ["node", "apps/api/dist/main.js"]
 
 FROM runtime AS ops
 USER root
-# PostgreSQL 16 client from the PostgreSQL project's signed repository (pg_dump must match the server's major version).
+# PostgreSQL 16 from the PostgreSQL project's signed repository (pg_dump must match the server's major version). The
+# server binaries are for the monthly restore drill (scripts/db/scheduled-drill.sh), which restores into a throwaway
+# server inside the task; no server runs otherwise.
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg lsb-release >/dev/null \
  && install -d /usr/share/postgresql-common/pgdg \
  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
  && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
- && apt-get update -qq && apt-get install -y -qq --no-install-recommends postgresql-client-16 >/dev/null \
+ && apt-get update -qq && apt-get install -y -qq --no-install-recommends postgresql-client-16 postgresql-16 >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 COPY scripts/db ./scripts/db
 USER node

@@ -117,6 +117,10 @@ run "staging_plans" {
     condition     = length(aws_wafv2_web_acl.main.rule) > 0 && length([for r in aws_wafv2_web_acl.main.rule : r if r.name == "rate-per-ip" && length(r.statement[0].rate_based_statement[0].scope_down_statement) == 1]) == 1
     error_message = "the per-IP rate limit must exempt our own NAT egress (all web → API traffic comes from it)"
   }
+  assert {
+    condition     = aws_scheduler_schedule.job["drill"].schedule_expression == "cron(0 2 1 * ? *)" && one(aws_ecs_task_definition.task["drill"].ephemeral_storage).size_in_gib == 30
+    error_message = "a monthly restore drill runs, with its own disk for the restore"
+  }
 }
 
 run "production_plans" {
@@ -128,9 +132,10 @@ run "production_plans" {
     id_domain   = "id.auction.example"
     admin_cidrs = ["203.0.113.10/32"]
     sizes = {
-      multi_az        = true, nat_gateways = 2, db_instance_class = "db.m7g.large", db_storage_gb = 200, db_backup_days = 35,
-      redis_node_type = "cache.m7g.large", redis_replicas = 1, api_count = 3, web_count = 2, keycloak_count = 2,
-      api_cpu         = 1024, api_memory = 2048, log_retention_days = 365, audit_retention_days = 2557, backup_lock_days = 35
+      multi_az          = true, nat_gateways = 2, db_instance_class = "db.m7g.large", db_storage_gb = 200, db_backup_days = 35,
+      redis_node_type   = "cache.m7g.large", redis_replicas = 1, api_count = 3, web_count = 2, keycloak_count = 2,
+      api_cpu           = 1024, api_memory = 2048, log_retention_days = 365, audit_retention_days = 2557, backup_lock_days = 35,
+      drill_storage_gib = 100
     }
   }
   assert {
@@ -148,5 +153,9 @@ run "production_plans" {
   assert {
     condition     = aws_ecs_service.svc["api"].desired_count == 3 && aws_ecs_service.svc["keycloak"].desired_count == 2
     error_message = "production capacity"
+  }
+  assert {
+    condition     = one(aws_ecs_task_definition.task["drill"].ephemeral_storage).size_in_gib == 100
+    error_message = "production restore drill gets room for a production-size restore"
   }
 }

@@ -73,6 +73,55 @@ const run = (script: string, args: string[], env: Record<string, string>) => {
     expect(d.out).not.toContain('restored into');
   });
 
+  // The monthly AWS drill: newest backup from S3 → throwaway local server → every restore-drill check. initdb refuses
+  // to run as root, so a root test runner hands the script to the postgres user.
+  const PG_BIN = process.env.PG_BIN ?? '/usr/lib/postgresql/16/bin';
+  const canDrill = !!process.env.TEST_S3_ENDPOINT && (existsSync(join(PG_BIN, 'initdb')) || !!process.env.REQUIRE_BACKUP_TESTS);
+  (canDrill ? describe : describe.skip)('scheduled drill (scripts/db/scheduled-drill.sh)', () => {
+    const aws = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test', AWS_REGION: 'us-east-1', AWS_ENDPOINT_URL_S3: process.env.TEST_S3_ENDPOINT!,
+      S3_FORCE_PATH_STYLE: '1', BACKUP_S3_SSE: 'AES256' };
+    const bucket = `telus-drill-${Date.now()}`;
+    const scheduled = (env: Record<string, string>) => {
+      const vars = { ...aws, PG_BIN, TMPDIR: tmpdir(), ...env };
+      const [cmd, args] = process.getuid?.() === 0
+        ? ['runuser', ['-u', 'postgres', '--', 'env', `PATH=${process.env.PATH}`, ...Object.entries(vars).map(([k, v]) => `${k}=${v}`), join(SCRIPTS, 'scheduled-drill.sh')]]
+        : [join(SCRIPTS, 'scheduled-drill.sh'), []];
+      try {
+        return { code: 0, out: execFileSync(cmd, args as string[], { env: { ...process.env, ...vars }, encoding: 'utf8', stdio: 'pipe' }) };
+      } catch (e: any) {
+        return { code: e.status as number, out: `${e.stdout ?? ''}${e.stderr ?? ''}` };
+      }
+    };
+
+    beforeAll(async () => {
+      const { S3Client, CreateBucketCommand } = await import('@aws-sdk/client-s3');
+      const s3 = new S3Client({ region: 'us-east-1', endpoint: process.env.TEST_S3_ENDPOINT, forcePathStyle: true, credentials: { accessKeyId: 'test', secretAccessKey: 'test' } });
+      await s3.send(new CreateBucketCommand({ Bucket: bucket, ObjectLockEnabledForBucket: true }));
+    });
+
+    it('with no backup in the bucket the drill fails', () => {
+      const d = scheduled({ DRILL_S3_URI: `s3://${bucket}/daily/` });
+      expect(d.code).not.toBe(0);
+      expect(d.out).toMatch(/no backups under/);
+    });
+
+    it('restores the newest backup from S3 into its own server and passes every check', () => {
+      expect(run('backup.sh', [dir], { BACKUP_DB_URL: BACKUP_URL!, BACKUP_S3_URI: `s3://${bucket}/daily/`, ...aws }).code).toBe(0);
+      const d = scheduled({ DRILL_S3_URI: `s3://${bucket}/daily/` });
+      expect(d.out).toMatch(/newest backup: telus-\d{8}T\d{6}Z\.dump/);
+      expect(d.out).toMatch(/ok {4}audit hash chain intact/);
+      expect(d.out).toContain('RESTORE DRILL PASSED');
+      expect(d.code).toBe(0);
+    });
+
+    it('a backup older than the limit fails the drill (the nightly job stopped)', () => {
+      const d = scheduled({ DRILL_S3_URI: `s3://${bucket}/daily/`, DRILL_MAX_AGE_HOURS: '-1' });
+      expect(d.code).toBe(1);
+      expect(d.out).toMatch(/FAIL {2}newest backup is .* old/);
+      expect(d.out).not.toContain('restored into');
+    });
+  });
+
   it('a backup of a tampered database fails the drill (audit chain), even though the file itself is intact', async () => {
     await admin.query('ALTER TABLE audit_logs DISABLE TRIGGER USER');
     await admin.query(`UPDATE audit_logs SET action = 'forged' WHERE id = (SELECT min(id) FROM audit_logs)`);

@@ -343,6 +343,9 @@ finance settles one — and saves numbered screenshots plus each bidder's browse
   checks: checksum, all migrations, the audit hash chain, every lot's price = top of its bid ledger, every invoice = sum of its
   lines, FORCE'd RLS and audit triggers still in place, and (right after a backup, with `source`) row counts equal the live
   database. Exit 0 only if everything passes.
+- **Monthly drill in AWS** — `scripts/db/scheduled-drill.sh` (scheduled task `drill`, 1st of the month): newest backup from
+  S3 → a throwaway PostgreSQL inside the task → every check above; also fails when the newest backup is more than 36 hours
+  old. See `infra/aws/README.md` → "Monthly restore drill".
 - **Tested** (`backup.spec`, in CI): good backup passes; a damaged file is stopped by its checksum before restoring; a backup
   of a secretly edited database fails on the audit chain; dumping without `BYPASSRLS` is refused. (The damaged-file test caught
   a real bug in the first version of the drill script: a failed check inside `a && b` does not stop a `set -e` script.)
@@ -519,5 +522,6 @@ through `docker compose exec`; the same admin operations were verified via the R
 13. `npm run load:http` on production-like hardware, load generator on separate machines.
 14. Third-party penetration test; fix findings.
 15. ~~Schedule backups, wire health checks~~ — done on AWS (step 16): nightly backup task, `/health/ready` as the ALB health
-    check, alarms by e-mail. Still to do: a monthly `restore-drill.sh`, and scraping `/metrics` (Prometheus or CloudWatch agent).
+    check, alarms by e-mail, and a monthly restore drill that alarms on failure or a stale backup. Still to do: scraping
+    `/metrics` (Prometheus or CloudWatch agent).
 16. A pilot auction with one or two friendly customers, then go live.

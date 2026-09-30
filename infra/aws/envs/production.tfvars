@@ -23,4 +23,5 @@ sizes = {
   log_retention_days   = 365
   audit_retention_days = 2557
   backup_lock_days     = 35
+  drill_storage_gib    = 100
 }
