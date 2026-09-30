@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
-import { parseLotWorkbook } from '../src/lib/lot-import';
+import { crc32, deflateRawSync } from 'zlib';
+import { declaredUnpackedSize, parseLotWorkbook } from '../src/lib/lot-import';
 
 async function book(rows: unknown[][]): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook();
@@ -51,5 +52,42 @@ describe('Excel lot import', () => {
     expect((await parseLotWorkbook(await book(big))).errors).toEqual(['At most 1000 lots per import.']);
     expect((await parseLotWorkbook(new TextEncoder().encode('Lot,Description\nL1,x').buffer as ArrayBuffer)).errors).toEqual(['This is not a readable .xlsx file.']);
     expect((await parseLotWorkbook(new ArrayBuffer(3 * 1024 * 1024))).errors).toEqual(['The file is larger than 2 MB.']);
+  });
+});
+
+/** A minimal zip (one deflated entry) written by hand, so the test controls every byte. */
+function zipOf(name: string, content: Buffer): Uint8Array {
+  const data = deflateRawSync(content);
+  const n = Buffer.from(name);
+  const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(crc32(content), 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(content.length, 22); local.writeUInt16LE(n.length, 26);
+  const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(8, 10); central.writeUInt32LE(crc32(content), 16); central.writeUInt32LE(data.length, 20);
+  central.writeUInt32LE(content.length, 24); central.writeUInt16LE(n.length, 28);
+  const cdOffset = 30 + n.length + data.length;
+  const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(46 + n.length, 12); eocd.writeUInt32LE(cdOffset, 16);
+  return new Uint8Array(Buffer.concat([local, n, data, central, n, eocd]));
+}
+
+describe('Excel import: archive size guard (zip bomb)', () => {
+  it('reads the declared unpacked size of a real workbook', async () => {
+    const size = declaredUnpackedSize(new Uint8Array(await book([['Lot', 'Description', 'Quantity', 'Starting price'], ['L1', 'x', 1, 100]])));
+    expect(size).toBeGreaterThan(1000);
+    expect(size).toBeLessThan(1024 * 1024);
+  });
+  it('refuses a small file that would unpack to hundreds of MB, before opening it', async () => {
+    const bomb = zipOf('xl/sharedStrings.xml', Buffer.alloc(200 * 1024 * 1024, 0x61));   // 200 MB of "a" → ~200 KB zipped
+    expect(bomb.byteLength).toBeLessThan(2 * 1024 * 1024);
+    expect(declaredUnpackedSize(bomb)).toBe(200 * 1024 * 1024);
+    const r = await parseLotWorkbook(bomb.slice().buffer as ArrayBuffer);
+    expect(r.lots).toEqual([]);
+    expect(r.errors[0]).toMatch(/too large once unpacked/);
+  });
+  it('treats non-zip data and truncated archives as unreadable', async () => {
+    expect(declaredUnpackedSize(new TextEncoder().encode('hello, not a zip'))).toBeNull();
+    const z = zipOf('a.txt', Buffer.from('hi'));
+    expect(declaredUnpackedSize(z.slice(0, z.length - 30))).toBeNull();
+    expect((await parseLotWorkbook(new TextEncoder().encode('nope').buffer as ArrayBuffer)).errors).toEqual(['This is not a readable .xlsx file.']);
   });
 });

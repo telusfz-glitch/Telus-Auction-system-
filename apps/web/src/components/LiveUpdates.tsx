@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { socketTicketAction } from '@/app/actions/customer';
+import { LOT_PRICE_EVENT } from '@/lib/live-price';
 import { createRefreshScheduler } from '@/lib/refresh-scheduler';
 
 const MESSAGES: Record<string, (d: Record<string, unknown>, lots: Record<string, string>) => string | null> = {
@@ -62,7 +63,10 @@ export function LiveUpdates({ auctionId, lotNumbers }: { auctionId: string; lotN
         if (data?.['auctionId'] !== auctionId) return;
         const msg = MESSAGES[event]?.(data, lots.current);
         if (msg) setNotice(msg);
-        if (event === 'lot.price') refresh.broadcast(); else refresh.urgent();
+        if (event === 'lot.price') {
+          window.dispatchEvent(new CustomEvent(LOT_PRICE_EVENT, { detail: data }));   // price cells update at once
+          refresh.broadcast();                                                         // the rest follows, rate-limited
+        } else refresh.urgent();
       });
     })();
 

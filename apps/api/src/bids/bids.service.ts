@@ -175,13 +175,14 @@ export class BidsService {
     return this.db.withPrincipal(p, async (c) => {
       const auction = (await c.query('SELECT id, status, bid_visibility FROM auctions WHERE id = $1', [auctionId])).rows[0];
       if (!auction) throw new BidRejected('AUCTION_NOT_FOUND', 'Auction not found.', 404);
+      // One pass over the auction (auction_lot_positions, migration 014) instead of two function calls per lot.
       const lots = (await c.query(
         `SELECT l.id AS lot_id, l.status, l.starting_price::text AS starting_price, l.fallback_increment::text AS fallback,
                 mb.amount AS my_highest_bid, coalesce(ps.leader_is_me, false) AS leader_is_me,
-                visible_highest_bid(l.id)::text AS current_highest_bid
+                ps.visible_highest::text AS current_highest_bid
            FROM auction_lots l
+           LEFT JOIN auction_lot_positions($1) ps ON ps.lot_id = l.id
            LEFT JOIN LATERAL (SELECT max(b.amount)::text AS amount FROM bids b WHERE b.lot_id = l.id AND b.customer_id = $2) mb ON true
-           LEFT JOIN LATERAL lot_price_state(l.id) ps ON true
           WHERE l.auction_id = $1 ORDER BY l.lot_number`, [auctionId, p.customerId])).rows;
       const brackets = await loadBrackets(c, p.customerId!);
       const fullPrice = auction.bid_visibility === 'full_price';

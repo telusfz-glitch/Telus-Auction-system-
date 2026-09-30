@@ -48,3 +48,17 @@ describe('end-user address for the API audit log', () => {
     for (const v of [null, '', '203.0.113.7, evil', 'unknown', '203.0.113.7,']) expect(clientAddress(v)).toBeNull();
   });
 });
+
+describe('live price display never goes backwards', () => {
+  it('keeps the higher of the server value and the pushed one, as exact decimals', async () => {
+    const { higherPrice } = await import('../src/lib/live-price');
+    expect(higherPrice('1200.00', '1250.00')).toBe('1250.00');
+    expect(higherPrice('1250.00', '1200.00')).toBe('1250.00');       // an older render must not undo a newer push
+    expect(higherPrice('999.99', '1000')).toBe('1000');
+    expect(higherPrice(null, '100.00')).toBe('100.00');
+    expect(higherPrice('100.00', undefined)).toBe('100.00');
+    expect(higherPrice('100.00', 'abc')).toBe('100.00');                // malformed pushes are ignored
+    expect(higherPrice(null, null)).toBeNull();
+    expect(higherPrice('0.10', '0.09')).toBe('0.10');
+  });
+});

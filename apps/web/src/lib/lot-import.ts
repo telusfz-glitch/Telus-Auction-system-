@@ -2,6 +2,36 @@ import ExcelJS from 'exceljs';
 
 export const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 export const MAX_IMPORT_LOTS = 1000;
+/** A real lot sheet expands to a few MB at most; more is refused before the workbook is opened (zip bomb). */
+export const MAX_UNPACKED_BYTES = 50 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 200;
+
+/**
+ * Reads the declared sizes from the .xlsx (zip) central directory without decompressing anything. Returns the total
+ * unpacked size, or null when the archive is malformed, uses ZIP64 (never needed for a lot sheet) or has too many
+ * entries. The declared sizes stop ordinary "zip bombs"; the upload is also limited to staff with an authenticator.
+ */
+export function declaredUnpackedSize(buf: Uint8Array): number | null {
+  const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65_535); i--) {
+    if (v.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return null;
+  const entries = v.getUint16(eocd + 10, true);
+  const cdSize = v.getUint32(eocd + 12, true);
+  const cdOffset = v.getUint32(eocd + 16, true);
+  if (entries === 0xffff || cdOffset === 0xffffffff || entries > MAX_ZIP_ENTRIES || cdOffset + cdSize > eocd) return null;
+  let total = 0;
+  for (let i = 0, p = cdOffset; i < entries; i++) {
+    if (p + 46 > eocd || v.getUint32(p, true) !== 0x02014b50) return null;
+    const size = v.getUint32(p + 24, true);
+    if (size === 0xffffffff) return null;
+    total += size;
+    p += 46 + v.getUint16(p + 28, true) + v.getUint16(p + 30, true) + v.getUint16(p + 32, true);
+  }
+  return total;
+}
 
 export interface ImportedLot { lotNumber: string; description: string; quantity: number; startingPrice: number; fallbackIncrement?: number }
 export interface ImportResult { lots: ImportedLot[]; errors: string[] }
@@ -45,6 +75,9 @@ function money(v: string | number | null): number | null {
  */
 export async function parseLotWorkbook(data: ArrayBuffer): Promise<ImportResult> {
   if (data.byteLength > MAX_IMPORT_BYTES) return { lots: [], errors: ['The file is larger than 2 MB.'] };
+  const unpacked = declaredUnpackedSize(new Uint8Array(data));
+  if (unpacked === null) return { lots: [], errors: ['This is not a readable .xlsx file.'] };
+  if (unpacked > MAX_UNPACKED_BYTES) return { lots: [], errors: ['This workbook is too large once unpacked. Please upload only the lot list.'] };
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(data);

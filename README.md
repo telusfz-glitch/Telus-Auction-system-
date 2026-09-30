@@ -391,7 +391,9 @@ blocked **all** customers at once during a busy auction (all API traffic comes f
 and audit entries now record the customer's real address (forwarded with a secret shared by web app and API,
 `CLIENT_IP_FORWARD_SECRET`); live auction pages no longer re-render on every price change for every spectator; the per-bid
 purchase-limit check is ~9× faster at 50,000 lots (migration 013); the minimum-next-bid rule and the role groups are
-defined once. Accepted/business items (Excel import size, price probing in hidden-price auctions) are explained there.
+defined once. Follow-up: the lot table of a 1,000-lot auction loads in ~6 ms instead of ~90 ms (migration 014), pushed
+prices appear instantly in full-price auctions, and oversized Excel archives are refused before opening. The remaining
+business item (price probing in hidden-price auctions) is explained there.
 
 ## Decisions recorded
 - Purchase limits do **not** count unpaid invoices (owner's decision, 2026-09-29) — gap 7 is by design.

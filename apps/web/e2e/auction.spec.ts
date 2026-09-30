@@ -442,6 +442,38 @@ test('an expired access token is refreshed exactly once, even when parallel requ
   await ctx.close();
 });
 
+test('full-price auction: a competitor\'s bid shows in the current-bid column at once, for every participant', async ({ browser }) => {
+  const db = new Pool({ connectionString: STACK.dbAdminUrl });
+  const c = await db.connect();
+  let auctionId = '';
+  try {
+    await c.query('BEGIN');
+    await c.query("SELECT set_config('app.role','staff',true), set_config('app.user_sub','e2e-seed',true)");
+    auctionId = (await c.query(
+      `INSERT INTO auctions (number, name, status, start_at, close_at, bid_visibility)
+       VALUES ('E2E-FULL', 'Open-price test', 'live', now() - interval '1 minute', now() + interval '30 minutes', 'full_price') RETURNING id`)).rows[0].id;
+    await c.query("INSERT INTO auction_lots (auction_id, lot_number, description, quantity, starting_price) VALUES ($1, 'F1', 'Open lot', 1, 100)", [auctionId]);
+    await c.query('INSERT INTO auction_participants (auction_id, customer_id, terms_accepted_at) VALUES ($1, $2, now()), ($1, $3, now())',
+      [auctionId, CUSTOMER.alpha.id, CUSTOMER.beta.id]);
+    await c.query('COMMIT');
+  } finally { c.release(); await db.end(); }
+
+  const alpha = await newUser(browser, 'alphaViewer');   // watches only (viewers cannot bid)
+  const beta = await newUser(browser, 'betaBidder');
+  for (const u of [alpha, beta]) {
+    await u.page.goto(`/auctions/${auctionId}`);
+    await expect(u.page.getByTestId('live-state')).toHaveAttribute('data-state', 'live');
+  }
+  await expect(lotRow(alpha.page, 'F1').getByTestId('current-bid')).toHaveText('—');
+  await lotRow(beta.page, 'F1').getByRole('textbox').fill('150');
+  await lotRow(beta.page, 'F1').getByRole('button', { name: 'Bid' }).click();
+  await expect(lotRow(beta.page, 'F1').getByTestId('position')).toHaveText('Leading');
+  // Pushed straight into the cell (the page's own rate-limited refresh would take up to ~3 s).
+  await expect(lotRow(alpha.page, 'F1').getByTestId('current-bid')).toHaveText('AED 150.00', { timeout: 3000 });
+  await alpha.ctx.close();
+  await beta.ctx.close();
+});
+
 test('no Keycloak token ever reached the browser in any response', () => {
   expect(inspected).toBeGreaterThan(30);                              // the check really looked at the traffic
   expect(leaks).toEqual([]);

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { acceptTermsAction, placeBidAction } from '@/app/actions/customer';
 import { ActionForm } from '@/components/ActionForm';
 import { Countdown } from '@/components/Countdown';
+import { LivePrice } from '@/components/LivePrice';
 import { LiveUpdates } from '@/components/LiveUpdates';
 import { ApiCallError, api } from '@/lib/api';
 import { BIDDERS, hasRole, requireSession } from '@/lib/auth';
@@ -107,7 +108,7 @@ export default async function AuctionPage({ params }: { params: Promise<{ id: st
                   <td>{lot.description}{lot.status === 'withdrawn' && <> <span className="badge">Withdrawn</span></>}</td>
                   <td className="num">{lot.quantity}</td>
                   <td className="num">{aed(lot.starting_price)}</td>
-                  {fullPrice && <td className="num">{aed(pos?.currentHighestBid)}</td>}
+                  {fullPrice && <td className="num"><LivePrice lotId={lot.id} serverValue={pos?.currentHighestBid} /></td>}
                   {started && <>
                     <td className="num" data-testid="my-bid">{aed(pos?.myHighestBid)}</td>
                     <td><span className={`badge ${pos?.status ?? ''}`} data-testid="position">{(ended ? FINAL_LABEL : POSITION_LABEL)[pos?.status ?? 'no_bid']}</span></td>

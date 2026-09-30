@@ -16,10 +16,11 @@ This is an internal review, not a substitute for the third-party penetration tes
 | S3 | Security / availability | Low | Public readiness check uses a database connection per request | Fixed |
 | S4 | Reliability | Low | A broken database connection could be handed to the next request | Fixed |
 | P3 | Performance | Low | Missing indexes for "my highest bid", invoices, team lists | Fixed |
+| P4 | Performance | Medium | Lot table of a 1,000-lot auction took ~90 ms per page view | Fixed (follow-up, ~6 ms) |
 | C1 | Code | Medium | The minimum-next-bid rule was written twice | Fixed (one function + tests) |
 | C2 | Code | Low | Role groups repeated in 8 places across API and web app | Fixed (shared package) |
 | C3 | Code | Low | Four copies of the same database helper | Fixed |
-| S5 | Security | Low | Excel import could be a "zip bomb" (staff-only) | Accepted, see below |
+| S5 | Security | Low | Excel import could be a "zip bomb" (staff-only) | Fixed (follow-up) |
 | S6 | Security | Info | Price probing through "bid too low" in hidden-price auctions | Business decision |
 | S7 | Security | Info | Access tokens live ≤5 min after a login is suspended | Known (README gap 6) |
 
@@ -71,10 +72,12 @@ wrong key, malformed address) and `apps/web/test/lib.test.ts` (header parsing).
 was returned to the pool and the next request could receive it.
 **Fix:** `DbService` now destroys such a connection (`release(error)`).
 
-### S5 (Low, accepted) — Excel import size
-An `.xlsx` file is a zip; a crafted 2 MB file could expand to far more in memory while the web server reads it. Only staff
-auction managers (password + authenticator app) can upload, so the risk is low. Recommended if imports ever open to
-customers: check the uncompressed size of the archive entries before parsing.
+### S5 (Low) — Excel import size — fixed in the follow-up
+An `.xlsx` file is a zip; a crafted 2 MB file could expand to far more in memory while the web server reads it. The
+import now reads the archive's directory first (no decompression) and refuses a workbook that declares more than 50 MB
+unpacked, more than 200 entries, or ZIP64 — a 200 MB "bomb" packed into ~200 KB is refused before it is opened
+(`apps/web/test/lot-import.test.ts`). Sizes in the directory are declared by the file, so this stops ordinary bombs, not
+a hand-crafted lying archive; uploads remain limited to auction managers with an authenticator app.
 
 ### S6 (Info) — price probing in hidden-price auctions
 In auctions that do not show prices, a bid below the minimum is refused with "too low" (without the amount). A bidder can
@@ -121,7 +124,10 @@ over a random 1 s window so browsers do not all arrive together; events about th
 leading", "you were outbid") and auction open/close still show within 150 ms. In the same example: at most ~400 renders
 per second instead of 5,000, and a busy minute costs each browser ~24 refreshes instead of 300 (tests in
 `test/refresh-scheduler.test.ts`; the browser suite still sees live updates).
-**Next step (recommended):** apply price pushes directly in the browser instead of re-rendering at all.
+**Follow-up (done):** in price-visible auctions the pushed price now appears in the "Current bid" cell at once, without
+waiting for the refresh (`components/LivePrice.tsx`; it never shows a lower price than it has seen, so an older render
+cannot undo a newer push). The minimum next bid still comes only from the server, so the pricing rule stays in one
+place. A new browser test covers a full-price auction end to end.
 
 ### P2 (Medium) — purchase-limit check inside every bid
 Measured on a copy with 200 customers, 50,000 lots and 520,000 bids:
@@ -138,6 +144,13 @@ Fix: new index `lot_bid_state_leader_idx` and a join through `lot_bid_state.auct
 invoices and a company's logins now have indexes too. On a live database, create large indexes with `CONCURRENTLY` first
 (the migration explains how).
 
+### P4 (Medium) — lot table for large auctions — fixed in the follow-up
+Measured with 1,000 lots, 50 bidders and 20,000 bids: the customer lot table (`/auctions/:id/my-positions`, loaded on
+every page view and refresh) took ~90 ms warm (~370 ms cold), 70 ms of it in two small functions called once per lot.
+One function for the whole auction (`auction_lot_positions`, migration 014, same visibility rules) brings it to
+**~6 ms**. Results were compared lot by lot for a leading customer, an outbid one and an uninvited one, in both
+price-visible and hidden auctions (identical), and a new test pins the rules (`bids.spec.ts`: it fails if the function
+ever returns the price in a hidden auction).
+
 ### Still to measure
-The load test on production-size hardware (roadmap) — especially the lot table for auctions with 1,000 lots, which calls
-two small database functions per lot.
+The load test on production-size hardware (roadmap).
